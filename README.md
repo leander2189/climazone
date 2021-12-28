@@ -1,4 +1,4 @@
-# climazone
+# ClimaZone (by R3-Solutions)
 Diseño y desarrollo del clon de consolas de AirZone
 
 ## notas
