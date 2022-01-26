@@ -66,10 +66,24 @@ bool touch_debug = false;
 //bool screen_redraw = false;
 
 bool pressed_onoff = false;
+int ClimaMode = 0; // 0 ninguno, 1 frío, 2 calor
 
 #define LEDC_CHANNEL_0     0
 #define LEDC_TIMER_13_BIT  8
 #define LEDC_BASE_FREQ     5000
+
+
+float coseno[12] = {1.0f, 0.8660f, 0.5f, 0.0f, -0.5f, -0.8660f, -1.0f, -0.8660f, -0.5f, 0.0f, 0.5f, 0.8660f };
+float seno[12] = {0.0f, 0.5f, 0.8660f, 1.0f, 0.8660f, 0.5f, 0.0f, -0.5f, -0.8660f, -1.0f, -0.8660f, -0.5f };
+
+// Cambiando el valor de darkMode se puede alternar en la versión light o dark
+const bool darkMode = true;
+const uint32_t FRONT_COL = darkMode ? TFT_WHITE : TFT_BLACK;
+const uint32_t BACK_COL = darkMode ? TFT_BLACK : TFT_WHITE;
+const uint32_t GRAY_COL = darkMode ? TFT_DARKGREY : TFT_LIGHTGREY;
+
+// Ajustar el valor mínimo de la pantalla en modo "sleep"
+const int MIN_BACKLIGHT = 5;
 
 void setup() {
   // put your setup code here, to run once:
@@ -102,7 +116,7 @@ void setup() {
   tft.setRotation(1);
   ts.setRotation(1);
 
-  tft.fillScreen(TFT_WHITE);
+  tft.fillScreen(BACK_COL);
   //tft.setTouch(calData);
   while (!Serial && (millis() <= 1000));
 
@@ -298,17 +312,17 @@ void callback(char* topic, byte* message, unsigned int length)
 
 void draw_onoff_button()
 {
-   uint32_t onoff_color = pressed_onoff ? TFT_RED : TFT_DARKGREY;
+   uint32_t onoff_color = pressed_onoff ? TFT_RED : GRAY_COL;
       tft.fillCircle(280, 210, 17, onoff_color);
-      tft.fillCircle(280, 210, 13, TFT_WHITE);
-      tft.fillRect(280-3, 210-20, 6, 10, TFT_WHITE);
+      tft.fillCircle(280, 210, 13, BACK_COL);
+      tft.fillRect(280-3, 210-20, 6, 10, BACK_COL);
       tft.fillRect(280-2, 210-20, 4, 15, onoff_color);
 }
 
 void draw_current_temp()
 {
    // Escribimos temperatura
-    tft.setTextColor(TFT_BLACK, TFT_WHITE);  // Text colour
+    tft.setTextColor(FRONT_COL, BACK_COL);  // Text colour
     tft.setTextFont(6);
     int txt_x = 170;
     txt_x += tft.drawFloat(temp2, 1, txt_x, 20);
@@ -318,7 +332,7 @@ void draw_current_temp()
     txt_x += tft.drawString("C", txt_x, 20);
 
     // Escribimos presión
-    tft.setTextColor(TFT_BLUE, TFT_WHITE);  // Text colour
+    tft.setTextColor(TFT_BLUE, BACK_COL);  // Text colour
     tft.setTextFont(4);
     txt_x = 200;
     txt_x += tft.drawNumber(int(pres),txt_x, 70);
@@ -326,7 +340,7 @@ void draw_current_temp()
     tft.drawString(" mbar", txt_x, 70);
     
     // Escribimos humedad relativa
-    tft.setTextColor(TFT_GREEN, TFT_WHITE);  // Text colour
+    tft.setTextColor(TFT_GREEN, BACK_COL);  // Text colour
     tft.setTextFont(4);
     txt_x = 225;
     txt_x += tft.drawNumber(int(hr), txt_x, 100);
@@ -350,12 +364,12 @@ bool set_screen_backlight(long lastTouch, long now, bool forced)
     return true;
   }
   else if (now - lastTouch < t2) {
-    float y = 255 - 255*(now - lastTouch - t1)/(float)(t2 - t1);
+    float y = 255 - (255 - MIN_BACKLIGHT)*(now - lastTouch - t1)/(float)(t2 - t1);
     ledcWrite(LEDC_CHANNEL_0, (int)y);
     return true;
   }
   else {
-    ledcWrite(LEDC_CHANNEL_0, 0);
+    ledcWrite(LEDC_CHANNEL_0, MIN_BACKLIGHT);
     return false;
   }
 }
@@ -372,6 +386,50 @@ void meas_values(long now)
   
   lastMeas = now;
 }
+
+void draw_sun(int x0, int y0, int r, uint32_t color)
+{
+  tft.fillCircle(x0, y0, r - 3, color);
+  for (int i = 0; i < 12; i++)
+  {
+      float cx = coseno[i];//cosf(30.0f * i);
+      float sx = seno[i];//sinf(30.0f * i);
+      int x1 = round(x0 + (r-1)*cx);
+      int x2 = round(x0 + (r+2)*cx);
+      int y1 = round(y0 + (r-1)*sx);
+      int y2 = round(y0 + (r+2)*sx);
+      tft.drawLine(x1,y1, x2,y2, color);
+  }
+}
+
+void draw_snow(int x0, int y0, int r, uint32_t color)
+{
+
+  for (int i = 0; i < 6; i++)
+  {
+    float cx = coseno[2*i];//(60.0f * i);
+    float sx = seno[2*i];//sinf(60.0f * i);
+
+    tft.drawLine(x0, y0, round(x0 + r*cx), round(y0 + r*sx), color);
+
+    int px1 = round(x0 + 0.5*r*cx);
+    int py1 = round(y0 + 0.5*r*sx);
+
+    int idx_izq = i > 0 ? 2*i - 1 : 11;
+    int idx_dch = i < 6 ? 2*i + 1 : 1;
+
+    int px2 = round(x0 + 0.75*r*coseno[idx_izq]);
+    int py2 = round(y0 + 0.75*r*seno[idx_izq]);
+
+    int px3 = round(x0 + 0.75*r*coseno[idx_dch]);
+    int py3 = round(y0 + 0.75*r*seno[idx_dch]);
+
+    tft.drawLine(px1, py1, px2, py2, color);
+    tft.drawLine(px1, py1, px3, py3, color);
+  }
+
+}
+
 
 void loop() 
 {
@@ -426,6 +484,8 @@ void loop()
   bool pressed_up = false;
   bool pressed_down = false;
   bool pressed_menu = false;
+  bool pressed_cold = false;
+  bool pressed_hot = false;
 
   bool draw_onoff = false;
 
@@ -434,8 +494,12 @@ void loop()
   {
     if (touch_debug) tft.fillCircle(x, y, 2, TFT_MAGENTA);
 
-    if (x >= 10 && x <= 70 && y >= 120 && y <= 150) pressed_up = true;
-    if (x >= 10 && x <= 70 && y >= 160 && y <= 190) pressed_down = true;
+    if (x >= 15 && x <= 75 && y >= 95 && y <= 120) pressed_up = true;
+    if (x >= 80 && x <= 140 && y >= 95 && y <= 120) pressed_down = true;
+
+    if (x >= 20 && x <= 50 && y >= 155 && y <= 185) pressed_cold = true;
+    if (x >= 80 && x <= 110 && y >= 155 && y <= 185) pressed_hot = true;
+
     if (x >= 150 && x <= 190 && y >= 215 && y <= 240) pressed_menu = true;
 
     // Encendido/Apagado: sólo permitimos una acción cada 2seg.
@@ -456,6 +520,10 @@ void loop()
   if (pressed_onoff) {
     airzone_active = !airzone_active;
   }
+
+  // Gestión del modo frío/calor
+  if (pressed_cold) ClimaMode = 1;
+  else if (pressed_hot) ClimaMode = 2;
 
   // Gestión de la temperatura del termostato
   if (airzone_active)
@@ -499,7 +567,7 @@ void loop()
     draw_onoff_button();
 
     if (!airzone_active)
-      tft.fillRect(0, 0, 160, 200, TFT_WHITE); // Si apagamos, borramos los controles del termostato
+      tft.fillRect(0, 0, 160, 200, BACK_COL); // Si apagamos, borramos los controles del termostato
   }
 
   
@@ -517,20 +585,64 @@ void loop()
   // Dibujamos controles del termostato
   if (airzone_active)
   {
-    if (pressed_up) tft.fillTriangle(10, 150, 70, 150, 40, 120, TFT_RED);
-    else tft.fillTriangle(10, 150, 70, 150, 40, 120, TFT_DARKGREY);
+    const int tX1 = 15;
+    const int tW = 60;
+    
+    const int tH = 35;
 
-    if (pressed_down) tft.fillTriangle(10, 160, 70, 160, 40, 190, TFT_CYAN);
-    else tft.fillTriangle(10, 160, 70, 160, 40, 190, TFT_DARKGREY);
+    const int tX2 = 80;
+    const int tY1 = 120;
+    const int tY2 = 120 - 35;
 
-    tft.setTextColor(TFT_BLACK, TFT_WHITE);  // Text colour
+    tft.fillTriangle(tX1, tY1, tX1+tW, tY1, tX1+tW/2, tY1-tH, TFT_RED);
+    //if (pressed_up) tft.fillTriangle(10, 150, 10+tW, 150, 10+tW/2, 120, TFT_RED);
+    //else tft.fillTriangle(10, 150, 70, 150, 40, 120, TFT_DARKGREY);
+
+    tft.fillTriangle(tX2, tY2, tX2+tW, tY2, tX2+tW/2, tY2+tH, TFT_CYAN);
+    //if (pressed_down) tft.fillTriangle(10, 160, 70, 160, 40, 190, TFT_CYAN);
+    //else tft.fillTriangle(10, 160, 70, 160, 40, 190, TFT_DARKGREY);
+
+    tft.setTextColor(FRONT_COL, BACK_COL);  // Text colour
     tft.setTextFont(6);
     int txt_x = 20 + tft.drawFloat(set_temp, 1, 20, 20);
     tft.setTextFont(1);
     txt_x += tft.drawString(" o", txt_x, 20);
     tft.setTextFont(4);
     txt_x += tft.drawString("C", txt_x, 20);
+
+    
+
+
+
   }
+
+  // Gestión modo frío/calor
+  {
+    tft.setTextFont(4);
+    //if (ClimaMode == 1) tft.setTextColor(TFT_BLACK, TFT_CYAN);
+    //else tft.setTextColor(TFT_BLACK, TFT_WHITE);
+    //tft.drawString("Fr", 20, 150);
+
+    uint32_t cold_col = ClimaMode == 1 ? TFT_CYAN : GRAY_COL;
+    draw_snow(35, 170, 15, cold_col);
+
+    uint32_t heat_col = ClimaMode == 2 ? TFT_ORANGE : GRAY_COL;
+    draw_sun(95, 170, 15, heat_col);
+
+
+    
+    if (ClimaMode == 1) // modo frío
+    {
+      digitalWrite(outQ3, HIGH);
+      digitalWrite(outQ4, LOW);
+    }
+    else if (ClimaMode == 2) // modo calor
+    {
+      digitalWrite(outQ3, LOW);
+      digitalWrite(outQ4, HIGH);
+    }
+  }
+
 
   
   // Dibujamos pantalla
@@ -540,15 +652,15 @@ void loop()
 
     // Escribimos wifi, mqtt y menú
     tft.setTextFont(2);
-    if (ACTIVE_WIFI) tft.setTextColor(TFT_BLACK, TFT_WHITE);
-    else tft.setTextColor(TFT_LIGHTGREY, TFT_WHITE);
+    if (ACTIVE_WIFI) tft.setTextColor(FRONT_COL, BACK_COL);
+    else tft.setTextColor(GRAY_COL, BACK_COL);
     tft.drawString("WiFi", 20, 215);
-    if (mqtt_active) tft.setTextColor(TFT_BLACK, TFT_WHITE);
-    else tft.setTextColor(TFT_LIGHTGREY, TFT_WHITE);
+    if (mqtt_active) tft.setTextColor(FRONT_COL, BACK_COL);
+    else tft.setTextColor(GRAY_COL, BACK_COL);
     tft.drawString("MQTT", 60, 215);
 
-    if (pressed_menu) tft.setTextColor(TFT_RED, TFT_WHITE);
-    else tft.setTextColor(TFT_BLACK, TFT_WHITE);
+    if (pressed_menu) tft.setTextColor(TFT_RED, BACK_COL);
+    else tft.setTextColor(FRONT_COL, BACK_COL);
     tft.drawString("MENU", 150, 215);
 
 
