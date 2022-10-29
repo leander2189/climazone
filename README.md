@@ -1,7 +1,27 @@
-# ClimaZone (by R3-Solutions)
-Diseño y desarrollo del clon de consolas de AirZone
+# ClimaZone
 
-## notas
-Para que funcione la demanda de calor, es necesario cortar la pista que llega a D35 y conectar el pin 2 de Q2 a D27 en su lugar
+Room console interface to Airzone control system, meant to replace old panels, like this one:
 
---> Esto se ha corregido ya en la V2 del PCB
+[image]
+
+TODO
+
+## Bill of materials
+ - ESP32 DevKit V1 DOIT
+ - TFT Touch screen 2.8" 240x320 (SD + SPI)
+ - BME280 I2C
+ - DS18B20
+ - PC817 x 4
+ - 1k resistor x 4
+ - 5k resistor x 1
+
+## PCB Design
+PCB design has been carried out using Kicad 6.0 and it
+
+TODO: List used libraries
+
+## Software
+TODO:
+
+## Case design and installation
+TODO
