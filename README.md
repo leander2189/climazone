@@ -16,9 +16,14 @@ TODO
  - 5k resistor x 1
 
 ## PCB Design
-PCB design has been carried out using Kicad 6.0 and it
+PCB design has been carried out using Kicad 6.0. The PCB is compatible both with master and slave consoles.
 
-TODO: List used libraries
+It uses a DS18B20 for temperature measurement and a BME280 to measure humidity and pressure.
+
+In the project there have been used 3 kicad libraries, which are already packaged:
+ - https://gitlab.com/VictorLamoine/kicad/-/tree/master/ @ Victor Lamoine
+ - https://github.com/colesnicov/kicad-TFT-Displays @ Colesnicov Denis
+ - https://github.com/Pingoin/Pingolib-Kicad @ Pingoin
 
 ## Software
 TODO:
