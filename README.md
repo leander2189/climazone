@@ -18,7 +18,7 @@ TODO
 ## PCB Design
 PCB design has been carried out using Kicad 6.0. The PCB is compatible both with master and slave consoles.
 
-It uses a DS18B20 for temperature measurement and a BME280 to measure humidity and pressure.
+The temperature console is based on an ESP32 with a touch screen as an interface. It uses a DS18B20 for temperature measurement and a BME280 to measure humidity and pressure. Finally, the outputs are activated using PC817 optocouplers.
 
 In the project there have been used 3 kicad libraries, which are already packaged:
  - https://gitlab.com/VictorLamoine/kicad/-/tree/master/ @ Victor Lamoine
