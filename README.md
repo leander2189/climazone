@@ -23,6 +23,10 @@ In the project there have been used 3 kicad libraries, which are already package
  - https://github.com/colesnicov/kicad-TFT-Displays @ Colesnicov Denis
  - https://github.com/Pingoin/Pingolib-Kicad @ Pingoin
 
+PCB Front               |  PCB Rear
+:----------------------:|:-----------------------:
+![](img/pcb_front.PNG)  |  ![](img/pcb_rear.PNG)
+
 ## Case design and installation (TODO)
 The case is designed to replace the old control panel, thus using the same interface bolts, as can be seen in the following picture.
 
