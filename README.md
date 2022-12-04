@@ -2,9 +2,7 @@
 
 Room console interface to Airzone control system, meant to replace old panels, like this one:
 
-[image]
-
-TODO
+![image info](img/airzone_orig.jpeg)
 
 ## Bill of materials
  - ESP32 DevKit V1 DOIT
@@ -25,8 +23,8 @@ In the project there have been used 3 kicad libraries, which are already package
  - https://github.com/colesnicov/kicad-TFT-Displays @ Colesnicov Denis
  - https://github.com/Pingoin/Pingolib-Kicad @ Pingoin
 
+## Case design and installation
+The case is designed 
+
 ## Software
 TODO:
-
-## Case design and installation
-TODO
