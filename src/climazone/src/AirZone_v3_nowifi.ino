@@ -7,9 +7,10 @@
 
 #include <WiFi.h>
 #include <PubSubClient.h>
+#include <EEPROM.h>
 
 const char* ssid     = "Casa";
-const char* password = "lemi2015";
+const char* password = "*******";
 
 Adafruit_BME280 bmp;
 TFT_eSPI tft = TFT_eSPI();       // Invoke custom library
@@ -19,18 +20,18 @@ XPT2046_Touchscreen ts(8);
 WiFiClient wifi_client;
 PubSubClient mqtt_client(wifi_client);
 
+float temp_offset = 0.0;
 float temp = 21.0;
 float temp2 = 22.0;
 float pres = 1013;
 float hr = 50.0;
 int counter = 0;
-uint16_t calData[5] = { 210, 3648, 145, 3642, 7 };
 
 
-float v0 = 3825;
-float v1 = 340;
-float w0 = 3800;
-float w1 = 310;
+// Factory settings for screen calib
+float v0_ = 3825, v1_ = 340, w0_ = 3800, w1_ = 310;
+// Actual settings for screen calib
+float v0 = v0_, v1 = v1_, w0 = w0_, w1 = w1_;
 
 float set_temp = 20.0;
 
@@ -48,22 +49,20 @@ const bool ACTIVE_WIFI = false;
 #define temperature_topic "sensor/temperature"
 #define pressure_topic "sensor/pressure"
 
+#define EEPROM_SIZE 32
+
 // Salidas digitales
 const int outQ1 = 33; // Demanda de frío
 const int outQ2 = 27; // Demanda de calor
 const int outQ3 = 12;
 const int outQ4 = 13;
-//const long histeresis = 60000;
 
 
 bool led_state = false;
-//const int ledPin = 27;
 const int screenBL = 25;
 
 bool airzone_active = false;
-
 bool touch_debug = false;
-//bool screen_redraw = false;
 
 bool pressed_onoff = false;
 int ClimaMode = 0; // 0 ninguno, 1 frío, 2 calor
@@ -82,11 +81,19 @@ const uint32_t FRONT_COL = darkMode ? TFT_WHITE : TFT_BLACK;
 const uint32_t BACK_COL = darkMode ? TFT_BLACK : TFT_WHITE;
 const uint32_t GRAY_COL = darkMode ? TFT_DARKGREY : TFT_LIGHTGREY;
 
+
+bool MASTER_MODE = true;
+bool MENU_MODE = false;
+
 // Ajustar el valor mínimo de la pantalla en modo "sleep"
 const int MIN_BACKLIGHT = 5;
 
 void setup() {
-  // put your setup code here, to run once:
+  
+  Serial.begin(9600);
+  if (!EEPROM.begin(EEPROM_SIZE))
+    Serial.println("Failed to initialized EEPROM");
+  delay(2000);
 
   // Configuramos salidas digitales del Climazone
   pinMode(outQ1, OUTPUT);
@@ -98,18 +105,11 @@ void setup() {
   pinMode(outQ4, OUTPUT);
   digitalWrite(outQ4, LOW);
 
-
-  //pinMode(ledPin, OUTPUT);
-  //pinMode(screenBL, OUTPUT);
   ledcSetup(LEDC_CHANNEL_0, LEDC_BASE_FREQ, LEDC_TIMER_13_BIT);
   ledcAttachPin(screenBL, LEDC_CHANNEL_0);
-  //digitalWrite(screenBL, HIGH);
-  
   
   bmp.begin(0x76); // Dirección I2C del dispositivo, encontrada con I2C-Scanner
   temp_sensor.begin();
-  
-  Serial.begin(38400);
   
   tft.init();
   ts.begin();
@@ -117,7 +117,6 @@ void setup() {
   ts.setRotation(1);
 
   tft.fillScreen(BACK_COL);
-  //tft.setTouch(calData);
   while (!Serial && (millis() <= 1000));
 
   if (ACTIVE_WIFI)
@@ -127,7 +126,40 @@ void setup() {
     mqtt_client.setCallback(callback);
   }
 
+  // Load Data from EEPROM
+  load_data_eeprom();
+
   draw_onoff_button();
+}
+
+void load_data_eeprom()
+{
+    Serial.println("Loading values from eeprom");
+    MASTER_MODE = EEPROM.readBool(0);
+    temp_offset = EEPROM.readFloat(1);
+    if (isnan(temp_offset)) temp_offset = 0;
+
+    v0 = EEPROM.readFloat(5);
+    if (isnan(v0) || v0 < 0 || v0 > 10000) v0 = v0_;
+    v1 = EEPROM.readFloat(9);
+    if (isnan(v1) || v1 < 0 || v1 > 10000) v1 = v1_;
+    w0 = EEPROM.readFloat(13);
+    if (isnan(w0) || w0 < 0 || w0 > 10000) w0 = w0_;
+    w1 = EEPROM.readFloat(17);
+    if (isnan(w1) || w1 < 0 || w1 > 10000) w1 = w1_;
+}
+
+void save_data_eeprom()
+{
+  int address = 0;
+  EEPROM.put(0, MASTER_MODE);
+  EEPROM.put(1, temp_offset);
+  EEPROM.put(5, v0);
+  EEPROM.put(9, v1);
+  EEPROM.put(13, w0);
+  EEPROM.put(17, w1);
+
+  EEPROM.commit();
 }
 
 void setup_wifi()
@@ -178,11 +210,11 @@ void calibrate_touch()
 {
   //digitalWrite(screenBL, HIGH);
   ledcWrite(0, 255);
-  tft.fillScreen(TFT_WHITE);
+  tft.fillScreen(BACK_COL);
   tft.setCursor(20, 0);
   tft.setTextFont(2);
   tft.setTextSize(1);
-  tft.setTextColor(TFT_RED, TFT_WHITE);
+  tft.setTextColor(TFT_RED, BACK_COL);
   tft.println("Touch corners as indicated");
   delay(2000);
 
@@ -193,7 +225,7 @@ void calibrate_touch()
 
   float x1 = 0, y1 = 0;
   get_touch_averaged(5, x1, y1);
-  tft.fillScreen(TFT_WHITE);
+  tft.fillScreen(BACK_COL);
   delay(1000);
 
   // Esquina 2
@@ -203,7 +235,7 @@ void calibrate_touch()
 
   float x2 = 0, y2 = 0;
   get_touch_averaged(5, x2, y2);
-  tft.fillScreen(TFT_WHITE);
+  tft.fillScreen(BACK_COL);
   delay(1000);
 
   // Esquina 3
@@ -213,7 +245,7 @@ void calibrate_touch()
 
   float x3 = 0, y3 = 0;
   get_touch_averaged(5, x3, y3);
-  tft.fillScreen(TFT_WHITE);
+  tft.fillScreen(BACK_COL);
   delay(1000);
 
   // Esquina 4
@@ -243,11 +275,11 @@ void calibrate_touch()
   Serial.print(w1);
   Serial.println();
 
-  tft.fillScreen(TFT_WHITE);
-  tft.setTextColor(TFT_GREEN, TFT_WHITE);
+  tft.fillScreen(BACK_COL);
+  tft.setTextColor(TFT_GREEN, BACK_COL);
   tft.println("Calibration complete!");
   delay(2000);
-  tft.fillScreen(TFT_WHITE);
+  tft.fillScreen(BACK_COL);
 }
 
 TS_Point calculate_touch_point(TS_Point p)
@@ -312,11 +344,11 @@ void callback(char* topic, byte* message, unsigned int length)
 
 void draw_onoff_button()
 {
-   uint32_t onoff_color = pressed_onoff ? TFT_RED : GRAY_COL;
-      tft.fillCircle(280, 210, 17, onoff_color);
-      tft.fillCircle(280, 210, 13, BACK_COL);
-      tft.fillRect(280-3, 210-20, 6, 10, BACK_COL);
-      tft.fillRect(280-2, 210-20, 4, 15, onoff_color);
+    uint32_t onoff_color = pressed_onoff ? TFT_RED : GRAY_COL;
+    tft.fillCircle(280, 210, 17, onoff_color);
+    tft.fillCircle(280, 210, 13, BACK_COL);
+    tft.fillRect(280-3, 210-20, 6, 10, BACK_COL);
+    tft.fillRect(280-2, 210-20, 4, 15, onoff_color);
 }
 
 void draw_current_temp()
@@ -376,15 +408,15 @@ bool set_screen_backlight(long lastTouch, long now, bool forced)
 
 void meas_values(long now)
 {
-  if (now - lastMeas < 5000) return;
+    if (now - lastMeas < 5000) return;
 
-  temp_sensor.requestTemperatures(); 
-  temp = bmp.readTemperature();
-  pres = bmp.readPressure()/100;
-  hr = bmp.readHumidity();
-  temp2 = temp_sensor.getTempCByIndex(0);
-  
-  lastMeas = now;
+    temp_sensor.requestTemperatures(); 
+    temp = bmp.readTemperature();
+    pres = bmp.readPressure()/100;
+    hr = bmp.readHumidity();
+    temp2 = temp_sensor.getTempCByIndex(0) + temp_offset;
+    
+    lastMeas = now;
 }
 
 void draw_sun(int x0, int y0, int r, uint32_t color)
@@ -431,17 +463,129 @@ void draw_snow(int x0, int y0, int r, uint32_t color)
 }
 
 
-void loop() 
+bool get_pressed_point(long now, uint16_t* x, uint16_t* y)
 {
-  long now = millis();
+  bool pressed = false;
+  TS_Point p_ = ts.getPoint();
 
-  // Actualizamos medición de valores
+    if (p_.z > 600) {
+      pressed = true;
+      lastTouch = now;
+      /*
+      Serial.print("Pressure = ");
+      Serial.print(p_.z);
+      Serial.print(", x = ");
+      Serial.print(p_.x);
+      Serial.print(", y = ");
+      Serial.print(p_.y);
+      Serial.println();
+      */
+  
+      TS_Point p = calculate_touch_point(p_);
+      *x = p.x;
+      *y = p.y;
+    }
+  return pressed;
+}
+
+void handle_menu_screen(long now)
+{
+    // TODO:
+    // Añadir histéresis
+
+    tft.setTextFont(2);
+    tft.setTextColor(FRONT_COL, BACK_COL);
+    tft.drawString("Temp. Offset", 20, 20);
+    tft.drawString("Master mode", 20, 50);
+    tft.drawString("Calibrate", 20, 80);
+    tft.drawString("Reset Calib.", 20, 110);
+    tft.drawString("Restart", 20, 140);
+    tft.drawString("Exit", 20, 200);
+
+    tft.drawFloat(temp_offset, 1, 230, 20);
+    MASTER_MODE ? tft.drawString("Yes", 230, 50) : tft.drawString(" No ", 230, 50);
+
+    int x1 = 200;
+    int x2 = 290;
+    int y_pos[] = {20, 50};
+    // Dibujamos controles
+    for (int i = 0; i < 2; i++) {
+        tft.fillTriangle(x1, y_pos[i], x1, y_pos[i]+16, x1-10, y_pos[i]+8, FRONT_COL);
+        tft.fillTriangle(x2, y_pos[i], x2, y_pos[i]+16, x2+10, y_pos[i]+8, FRONT_COL);
+    }
+
+    bool pressed = false;
+    uint16_t x = 0, y = 0; // To store the touch coordinates
+    if (ts.touched() && now - lastTouch > 200)  pressed = get_pressed_point(now, &x, &y);
+
+    bool pressed_exit = false;
+    bool pressed_calibrate = false;
+    bool pressed_reset_calib = false;
+    
+    // Eventos táctiles
+    if (pressed) 
+    {
+        if (touch_debug) tft.fillCircle(x, y, 2, TFT_MAGENTA);
+
+        // Botón Exit
+        if (x >= 20 && x <= 75 && y >= 200 && y <= 216) pressed_exit = true;
+
+        // Control offset temperatura
+        if (x >= x1 - 10 && x <= x1 && y >= y_pos[0] && y <= y_pos[0] + 16) {
+            tft.fillRect(210, 20, 280, 16, BACK_COL);
+            temp_offset -= 0.1;
+        }
+        if (x >= x2 && x <= x2 + 10 && y >= y_pos[0] && y <= y_pos[0] + 16) {
+            tft.fillRect(210, 20, 280, 16, BACK_COL);
+            temp_offset += 0.1;
+        }
+
+        // Control offset temperatura
+        if (x >= x1 - 10 && x <= x1 && y >= y_pos[1] && y <= y_pos[1] + 16) MASTER_MODE = !MASTER_MODE;
+        if (x >= x2 && x <= x2 + 10 && y >= y_pos[1] && y <= y_pos[1] + 16) MASTER_MODE = !MASTER_MODE;
+
+        // Calibrate
+        if (x >= 20 && x <= 100 && y >= 80 && y <= 80 + 16) pressed_calibrate = true;
+
+        // Reset calib
+        if (x >= 20 && x <= 100 && y >= 110 && y <= 110 + 16) pressed_reset_calib = true;
+
+        // Restart
+        if (x >= 20 && x <= 100 && y >= 140 && y <= 140 + 16) {
+            Serial.println("Restarting...");
+            sleep(1);
+            ESP.restart();
+        }
+    }
+
+    if (pressed_exit) {
+        save_data_eeprom();
+        tft.fillScreen(BACK_COL);
+        MENU_MODE = false;
+        draw_onoff_button(); // TODO: Esto no debería estar aquí
+        return;
+    }
+
+    if (pressed_calibrate) {
+        tft.fillScreen(BACK_COL);
+        calibrate_touch();
+        return;
+    }
+
+    if (pressed_reset_calib) {
+        v0 = v0_; v1 = v1_;
+        w0 = w0_; w1 = w1_;
+    }
+
+}
+
+void handle_main_screen(long now)
+{
+ // Actualizamos medición de valores
   meas_values(now);
 
   // Rutina para apagar la pantalla pasados 2 segundos
   bool screen_active = set_screen_backlight(lastTouch, now, false);
-
-
 
   // Gestión de la conexión con MQTT
   bool mqtt_active = false;
@@ -455,30 +599,11 @@ void loop()
     if (mqtt_active) mqtt_client.loop();
   }
 
-
   // Gestión de la pantalla táctil
   bool pressed = false;
   bool touch_activated = true;
-  uint16_t x = 0, y = 0, z = 0; // To store the touch coordinates
-  if (touch_activated && ts.touched() && now - lastTouch > 200) {
-    TS_Point p = ts.getPoint();
-
-    if (p.z > 600) {
-      pressed = true;
-      lastTouch = now;
-
-      Serial.print("Pressure = ");
-      Serial.print(p.z);
-      Serial.print(", x = ");
-      Serial.print(p.x);
-      Serial.print(", y = ");
-      Serial.print(p.y);
-      Serial.println();
-  
-      TS_Point p2 = calculate_touch_point(p);
-      x = p2.x; y = p2.y; z = p2.z;
-    }
-  }
+  uint16_t x = 0, y = 0; // To store the touch coordinates
+  if (touch_activated && ts.touched() && now - lastTouch > 200) pressed = get_pressed_point(now, &x, &y);
 
 
   bool pressed_up = false;
@@ -535,24 +660,12 @@ void loop()
       if (set_temp < 15) set_temp = 15;
 
       // Demanda de frío
-      if (temp2 > set_temp + 0.1) 
-      {
-        digitalWrite(outQ1, HIGH);
-      }
-      else
-      {
-        digitalWrite(outQ1, LOW);
-      }
+      if (temp2 > set_temp + 0.1)  digitalWrite(outQ1, HIGH);
+      else digitalWrite(outQ1, LOW);
       
       // Demanda de calor
-      if (temp2 < set_temp - 0.1) 
-      {
-        digitalWrite(outQ2, HIGH);
-      }
-      else
-      {
-        digitalWrite(outQ2, LOW);
-      }
+      if (temp2 < set_temp - 0.1)  digitalWrite(outQ2, HIGH);
+      else digitalWrite(outQ2, LOW);
   }
   else
   {
@@ -574,11 +687,12 @@ void loop()
   // Comprobamos si es necesario limpiar la pantalla
   //if (screen_redraw) tft.fillScreen(TFT_WHITE);
 
-
-  // Gestión del menu --> TODO: Revisar
+  // Gestión del menu
   if (pressed_menu) 
   {
-    calibrate_touch();
+    // BORRAMOS PANTALLA
+    tft.fillScreen(BACK_COL);
+    MENU_MODE = true;
     return;
   }
 
@@ -595,12 +709,7 @@ void loop()
     const int tY2 = 120 - 35;
 
     tft.fillTriangle(tX1, tY1, tX1+tW, tY1, tX1+tW/2, tY1-tH, TFT_RED);
-    //if (pressed_up) tft.fillTriangle(10, 150, 10+tW, 150, 10+tW/2, 120, TFT_RED);
-    //else tft.fillTriangle(10, 150, 70, 150, 40, 120, TFT_DARKGREY);
-
     tft.fillTriangle(tX2, tY2, tX2+tW, tY2, tX2+tW/2, tY2+tH, TFT_CYAN);
-    //if (pressed_down) tft.fillTriangle(10, 160, 70, 160, 40, 190, TFT_CYAN);
-    //else tft.fillTriangle(10, 160, 70, 160, 40, 190, TFT_DARKGREY);
 
     tft.setTextColor(FRONT_COL, BACK_COL);  // Text colour
     tft.setTextFont(6);
@@ -609,73 +718,75 @@ void loop()
     txt_x += tft.drawString(" o", txt_x, 20);
     tft.setTextFont(4);
     txt_x += tft.drawString("C", txt_x, 20);
-
-    
-
-
-
   }
 
-  // Gestión modo frío/calor
-  {
-    tft.setTextFont(4);
-    //if (ClimaMode == 1) tft.setTextColor(TFT_BLACK, TFT_CYAN);
-    //else tft.setTextColor(TFT_BLACK, TFT_WHITE);
-    //tft.drawString("Fr", 20, 150);
-
-    uint32_t cold_col = ClimaMode == 1 ? TFT_CYAN : GRAY_COL;
-    draw_snow(35, 170, 15, cold_col);
-
-    uint32_t heat_col = ClimaMode == 2 ? TFT_ORANGE : GRAY_COL;
-    draw_sun(95, 170, 15, heat_col);
-
-
-    
-    if (ClimaMode == 1) // modo frío
+    // Gestión modo frío/calor
+    if (MASTER_MODE)
     {
-      digitalWrite(outQ3, HIGH);
-      digitalWrite(outQ4, LOW);
-    }
-    else if (ClimaMode == 2) // modo calor
-    {
-      digitalWrite(outQ3, LOW);
-      digitalWrite(outQ4, HIGH);
-    }
-  }
+        tft.setTextFont(4);
 
+        uint32_t cold_col = ClimaMode == 1 ? TFT_CYAN : GRAY_COL;
+        draw_snow(35, 170, 15, cold_col);
 
+        uint32_t heat_col = ClimaMode == 2 ? TFT_ORANGE : GRAY_COL;
+        draw_sun(95, 170, 15, heat_col);
+
+        if (ClimaMode == 1) // modo frío
+        {
+            digitalWrite(outQ3, HIGH);
+            digitalWrite(outQ4, LOW);
+        }
+        else if (ClimaMode == 2) // modo calor
+        {
+            digitalWrite(outQ3, LOW);
+            digitalWrite(outQ4, HIGH);
+        }
+    }
   
-  // Dibujamos pantalla
-  if (now - lastMsg > 2000)
-  {
-    draw_current_temp();
-
-    // Escribimos wifi, mqtt y menú
-    tft.setTextFont(2);
-    if (ACTIVE_WIFI) tft.setTextColor(FRONT_COL, BACK_COL);
-    else tft.setTextColor(GRAY_COL, BACK_COL);
-    tft.drawString("WiFi", 20, 215);
-    if (mqtt_active) tft.setTextColor(FRONT_COL, BACK_COL);
-    else tft.setTextColor(GRAY_COL, BACK_COL);
-    tft.drawString("MQTT", 60, 215);
-
-    if (pressed_menu) tft.setTextColor(TFT_RED, BACK_COL);
-    else tft.setTextColor(FRONT_COL, BACK_COL);
-    tft.drawString("MENU", 150, 215);
-
-
-    // Enviamos datos por mqtt
-    if (mqtt_active)
+    // Dibujamos pantalla
+    if (now - lastMsg > 2000)
     {
-      //Serial.println("Sending MQTT topics...");
-      mqtt_client.publish(temperature_topic, String(temp2).c_str(), true);
-      mqtt_client.publish(humidity_topic, String(hr).c_str(), true);
-      mqtt_client.publish(pressure_topic, String(pres).c_str(), true);
+        draw_current_temp();
+
+        // Escribimos wifi, mqtt y menú
+        tft.setTextFont(2);
+        if (ACTIVE_WIFI) tft.setTextColor(FRONT_COL, BACK_COL);
+        else tft.setTextColor(GRAY_COL, BACK_COL);
+        tft.drawString("WiFi", 20, 215);
+        if (mqtt_active) tft.setTextColor(FRONT_COL, BACK_COL);
+        else tft.setTextColor(GRAY_COL, BACK_COL);
+        tft.drawString("MQTT", 60, 215);
+
+        if (pressed_menu) tft.setTextColor(TFT_RED, BACK_COL);
+        else tft.setTextColor(FRONT_COL, BACK_COL);
+        tft.drawString("MENU", 150, 215);
+
+        // Enviamos datos por mqtt
+        if (mqtt_active)
+        {
+            //Serial.println("Sending MQTT topics...");
+            mqtt_client.publish(temperature_topic, String(temp2).c_str(), true);
+            mqtt_client.publish(humidity_topic, String(hr).c_str(), true);
+            mqtt_client.publish(pressure_topic, String(pres).c_str(), true);
+        }
+
+        lastMsg = now;
     }
+}
 
-    lastMsg = now;
-  }
+void loop() 
+{
+    // TODO:
+    // Activar programación OTA?
 
-  // Si hemos redibujado la pantalla, desactivamos este evento
-  //if (screen_redraw) screen_redraw = false;
+    long now = millis();
+
+    // MENU SCREEN
+    if (MENU_MODE == true)
+    {
+        handle_menu_screen(now);
+        return;
+    }
+    // MAIN SCREEN
+    handle_main_screen(now);
 }
