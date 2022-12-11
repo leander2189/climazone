@@ -27,18 +27,35 @@ PCB Front               |  PCB Rear
 :----------------------:|:-----------------------:
 ![](img/pcb_front.PNG)  |  ![](img/pcb_rear.PNG)
 
-## Case design and installation (TODO)
+## Case design and installation
 The case is designed to replace the old control panel, thus using the same interface bolts, as can be seen in the following picture.
 
-[image] TODO
+![image info](img/back_case.jpeg)
 
-The design is composed of 3 elements, all of them can be 3D printed:
+The design is composed of 2 elements, all of them can be 3D printed:
 - The bottom part, which is bolted to the wall
 - The top part, which encloses the PCB
-- A plastic "bolt" which keeps the other parts held together
 
 ![image info](img/case_assembly.PNG)
 
 
 ## Software (TODO)
-...
+The software included measures temperature, humidity and pressure every 5s, showing this information on the display. Additionally, when pushing on the On/Off button, the goal temperature will be set up. This goal is used to activate the air conditioner.
+
+![image info](img/main_screen.jpeg)
+
+Also a menu screen is added, to configure several parameters of the console:
+- Temperature offset, to adjust the readings
+- Master/slave mode
+- Calibrate screen
+- Restore screen calibration defaults
+- Restart system
+
+Configuration values are saved in the EEPROM of the ESP32.
+
+![image info](img/menu_screen.jpeg)
+
+TODO list:
+- [ ] Connect with Wifi
+- [ ] Integration with Home Assistant
+- [ ] Provide keyboard to set Wifi password
