@@ -1,13 +1,18 @@
 #include <Adafruit_BME280.h>
 #include <OneWire.h>
 #include <DallasTemperature.h>
-#include <TFT_eSPI.h> // Hardware-specific library
+
 #include <SPI.h>
-#include <XPT2046_Touchscreen.h>
+#include <TFT_eSPI.h>
 
 #include <WiFi.h>
 #include <PubSubClient.h>
-#include <EEPROM.h>
+#include <Preferences.h>
+
+#include <esp_task_wdt.h>
+
+#define WDT_TIMEOUT 120
+
 
 const char* ssid     = "Casa";
 const char* password = "*******";
@@ -16,7 +21,6 @@ Adafruit_BME280 bmp;
 TFT_eSPI tft = TFT_eSPI();       // Invoke custom library
 OneWire oneWire(32);
 DallasTemperature temp_sensor(&oneWire);
-XPT2046_Touchscreen ts(8);
 WiFiClient wifi_client;
 PubSubClient mqtt_client(wifi_client);
 
@@ -29,9 +33,9 @@ int counter = 0;
 
 
 // Factory settings for screen calib
-float v0_ = 3825, v1_ = 340, w0_ = 3800, w1_ = 310;
+uint16_t calData_[5] = { 427, 3445, 323, 3434, 7 };
 // Actual settings for screen calib
-float v0 = v0_, v1 = v1_, w0 = w0_, w1 = w1_;
+uint16_t calData[5];
 
 float set_temp = 20.0;
 
@@ -49,7 +53,8 @@ const bool ACTIVE_WIFI = false;
 #define temperature_topic "sensor/temperature"
 #define pressure_topic "sensor/pressure"
 
-#define EEPROM_SIZE 32
+//#define EEPROM_SIZE 32
+Preferences preferences;
 
 // Salidas digitales
 const int outQ1 = 33; // Demanda de frío
@@ -86,14 +91,14 @@ bool MASTER_MODE = true;
 bool MENU_MODE = false;
 
 // Ajustar el valor mínimo de la pantalla en modo "sleep"
-const int MIN_BACKLIGHT = 5;
+const int MIN_BACKLIGHT = 15;
 
 void setup() {
   
   Serial.begin(9600);
-  if (!EEPROM.begin(EEPROM_SIZE))
-    Serial.println("Failed to initialized EEPROM");
-  delay(2000);
+  Serial.println("Configuring WDT...");
+  esp_task_wdt_init(WDT_TIMEOUT, true); //enable panic so ESP32 restarts
+  esp_task_wdt_add(NULL); //add current thread to WDT watch
 
   // Configuramos salidas digitales del Climazone
   pinMode(outQ1, OUTPUT);
@@ -112,9 +117,12 @@ void setup() {
   temp_sensor.begin();
   
   tft.init();
-  ts.begin();
   tft.setRotation(1);
-  ts.setRotation(1);
+
+  // Load Data from EEPROM
+  load_data_eeprom();
+  // Configure touch screen
+  tft.setTouch(calData);
 
   tft.fillScreen(BACK_COL);
   while (!Serial && (millis() <= 1000));
@@ -126,40 +134,45 @@ void setup() {
     mqtt_client.setCallback(callback);
   }
 
-  // Load Data from EEPROM
-  load_data_eeprom();
-
   draw_onoff_button();
 }
 
 void load_data_eeprom()
 {
-    Serial.println("Loading values from eeprom");
-    MASTER_MODE = EEPROM.readBool(0);
-    temp_offset = EEPROM.readFloat(1);
-    if (isnan(temp_offset)) temp_offset = 0;
+  if (!preferences.begin("settings", false))
+    Serial.println("Failed to initialize settings memory");
+  else
+    Serial.println("Loading settings from memory");
 
-    v0 = EEPROM.readFloat(5);
-    if (isnan(v0) || v0 < 0 || v0 > 10000) v0 = v0_;
-    v1 = EEPROM.readFloat(9);
-    if (isnan(v1) || v1 < 0 || v1 > 10000) v1 = v1_;
-    w0 = EEPROM.readFloat(13);
-    if (isnan(w0) || w0 < 0 || w0 > 10000) w0 = w0_;
-    w1 = EEPROM.readFloat(17);
-    if (isnan(w1) || w1 < 0 || w1 > 10000) w1 = w1_;
+  MASTER_MODE = preferences.getBool("master_mode", false);
+  temp_offset = preferences.getFloat("temp_offset", 0.0f);
+
+  // Load touch screen calibration
+  calData[0] = preferences.getUShort("caldata_0", calData_[0]);
+  calData[1] = preferences.getUShort("caldata_1", calData_[1]);
+  calData[2] = preferences.getUShort("caldata_2", calData_[2]);
+  calData[3] = preferences.getUShort("caldata_3", calData_[3]);
+  calData[4] = preferences.getUShort("caldata_4", calData_[4]);
+
+  preferences.end();
 }
 
 void save_data_eeprom()
 {
-  int address = 0;
-  EEPROM.put(0, MASTER_MODE);
-  EEPROM.put(1, temp_offset);
-  EEPROM.put(5, v0);
-  EEPROM.put(9, v1);
-  EEPROM.put(13, w0);
-  EEPROM.put(17, w1);
+  if (!preferences.begin("settings", false))
+    Serial.println("Failed to initialize settings memory");
 
-  EEPROM.commit();
+  preferences.putBool("master_mode", MASTER_MODE);
+  preferences.putFloat("temp_offset", temp_offset);
+
+  // Save touch screen calibration
+  preferences.putUShort("caldata_0", calData[0]);
+  preferences.putUShort("caldata_1", calData[1]);
+  preferences.putUShort("caldata_2", calData[2]);
+  preferences.putUShort("caldata_3", calData[3]);
+  preferences.putUShort("caldata_4", calData[4]);
+
+  preferences.end();
 }
 
 void setup_wifi()
@@ -184,11 +197,12 @@ void get_touch_averaged(int max_touches, float &x, float &y)
   int touch_count = 0;
   float _x = 0, _y = 0;
   
+  /*
   while (touch_count < max_touches)
   {
     if (ts.touched()) 
     {
-      TS_Point p = ts.getPoint();
+      //TS_Point p = ts.getPoint();
       _x += p.x;
       _y += p.y;
       touch_count++;
@@ -201,6 +215,7 @@ void get_touch_averaged(int max_touches, float &x, float &y)
     }
     delay(100);
   }
+  */
   
   x = _x/max_touches;
   y = _y/max_touches;
@@ -208,95 +223,28 @@ void get_touch_averaged(int max_touches, float &x, float &y)
 
 void calibrate_touch()
 {
-  //digitalWrite(screenBL, HIGH);
-  ledcWrite(0, 255);
-  tft.fillScreen(BACK_COL);
-  tft.setCursor(20, 0);
-  tft.setTextFont(2);
-  tft.setTextSize(1);
-  tft.setTextColor(TFT_RED, BACK_COL);
-  tft.println("Touch corners as indicated");
-  delay(2000);
+    tft.fillScreen(BACK_COL);
+    tft.setCursor(20, 0);
+    tft.setTextFont(2);
+    tft.setTextSize(1);
+    tft.setTextColor(FRONT_COL, BACK_COL);
 
-  // Esquina 1
-  tft.drawLine(0, 0, 30, 30, TFT_RED);
-  tft.drawLine(0, 0, 20, 0, TFT_RED);
-  tft.drawLine(0, 0, 0, 20, TFT_RED);
+    tft.println("Touch corners as indicated");
 
-  float x1 = 0, y1 = 0;
-  get_touch_averaged(5, x1, y1);
-  tft.fillScreen(BACK_COL);
-  delay(1000);
+    delay(500);
 
-  // Esquina 2
-  tft.drawLine(320,0, 320-30, 30, TFT_RED);
-  tft.drawLine(320,0, 320-20, 0, TFT_RED);
-  tft.drawLine(320,0, 320, 20, TFT_RED);
+    tft.setTextFont(1);
+    tft.println();
 
-  float x2 = 0, y2 = 0;
-  get_touch_averaged(5, x2, y2);
-  tft.fillScreen(BACK_COL);
-  delay(1000);
+    tft.calibrateTouch(calData, TFT_MAGENTA, BACK_COL, 15);
+    tft.setTouch(calData);
+    tft.setTextColor(TFT_GREEN, BACK_COL);
+    tft.println("Calibration complete!");
 
-  // Esquina 3
-  tft.drawLine(320, 240, 320-30, 240-30, TFT_RED);
-  tft.drawLine(320, 240, 320-20, 240, TFT_RED);
-  tft.drawLine(320, 240, 320, 240-20, TFT_RED);
+    Serial.printf("Touch Calibration Data: [%d, %d, %d, %d, %d]\n", calData[0], calData[1], calData[2], calData[3], calData[4]);
 
-  float x3 = 0, y3 = 0;
-  get_touch_averaged(5, x3, y3);
-  tft.fillScreen(BACK_COL);
-  delay(1000);
-
-  // Esquina 4
-  tft.drawLine(0, 240, 30, 240-30, TFT_RED);
-  tft.drawLine(0, 240, 20, 240, TFT_RED);
-  tft.drawLine(0, 240, 0, 240-20, TFT_RED);
-
-  float x4 = 0, y4 = 0;
-  get_touch_averaged(5, x4, y4);
-
-  // Calculamos resultados
-  v0 = 0.5*(x1+x4);
-  v1 = 0.5*(x2+x3);
-
-  w0 = 0.5*(y1+y2);
-  w1 = 0.5*(y3+y4);
-
-  Serial.print("V0 = ");
-  Serial.print(v0);
-  Serial.print(", V1 = ");
-  Serial.print(v1);
-  Serial.println();
-
-  Serial.print("W0 = ");
-  Serial.print(w0);
-  Serial.print(", W1 = ");
-  Serial.print(w1);
-  Serial.println();
-
-  tft.fillScreen(BACK_COL);
-  tft.setTextColor(TFT_GREEN, BACK_COL);
-  tft.println("Calibration complete!");
-  delay(2000);
-  tft.fillScreen(BACK_COL);
-}
-
-TS_Point calculate_touch_point(TS_Point p)
-{
-  TS_Point p2;
-
-  float x = 320*(p.x - v0)/(v1-v0);
-  float y = 240*(p.y - w0)/(w1-w0);
-  Serial.print(", XX = ");
-  Serial.print(x);
-  Serial.print(", YY = ");
-  Serial.print(y);
-  Serial.println();
-  p2.x = (uint16_t)x;
-  p2.y = (uint16_t)y;
-  p2.z = p.z;
-  return p2;
+    delay(500);
+    tft.fillScreen(BACK_COL);
 }
 
 void reconnect_mqtt() 
@@ -415,6 +363,9 @@ void meas_values(long now)
     pres = bmp.readPressure()/100;
     hr = bmp.readHumidity();
     temp2 = temp_sensor.getTempCByIndex(0) + temp_offset;
+
+    Serial.print("Temp: ");
+    Serial.println(temp);
     
     lastMeas = now;
 }
@@ -462,29 +413,13 @@ void draw_snow(int x0, int y0, int r, uint32_t color)
 
 }
 
-
 bool get_pressed_point(long now, uint16_t* x, uint16_t* y)
 {
-  bool pressed = false;
-  TS_Point p_ = ts.getPoint();
+  // Pressed will be set true is there is a valid touch on the screen
+  const uint16_t threshold = 600u;
+  bool pressed = tft.getTouch(x, y, threshold);
+  if (pressed) lastTouch = now;
 
-    if (p_.z > 600) {
-      pressed = true;
-      lastTouch = now;
-      /*
-      Serial.print("Pressure = ");
-      Serial.print(p_.z);
-      Serial.print(", x = ");
-      Serial.print(p_.x);
-      Serial.print(", y = ");
-      Serial.print(p_.y);
-      Serial.println();
-      */
-  
-      TS_Point p = calculate_touch_point(p_);
-      *x = p.x;
-      *y = p.y;
-    }
   return pressed;
 }
 
@@ -516,7 +451,8 @@ void handle_menu_screen(long now)
 
     bool pressed = false;
     uint16_t x = 0, y = 0; // To store the touch coordinates
-    if (ts.touched() && now - lastTouch > 200)  pressed = get_pressed_point(now, &x, &y);
+    
+    if (now - lastTouch > 200) pressed = get_pressed_point(now, &x, &y);
 
     bool pressed_exit = false;
     bool pressed_calibrate = false;
@@ -573,8 +509,8 @@ void handle_menu_screen(long now)
     }
 
     if (pressed_reset_calib) {
-        v0 = v0_; v1 = v1_;
-        w0 = w0_; w1 = w1_;
+        for (int i = 0; i < 5; i++) calData[i] = calData_[i];
+        tft.setTouch(calData);
     }
 
 }
@@ -603,8 +539,8 @@ void handle_main_screen(long now)
   bool pressed = false;
   bool touch_activated = true;
   uint16_t x = 0, y = 0; // To store the touch coordinates
-  if (touch_activated && ts.touched() && now - lastTouch > 200) pressed = get_pressed_point(now, &x, &y);
-
+  
+  if (now -lastTouch > 200) pressed = get_pressed_point(now, &x, &y);
 
   bool pressed_up = false;
   bool pressed_down = false;
@@ -776,6 +712,8 @@ void handle_main_screen(long now)
 
 void loop() 
 {
+    esp_task_wdt_reset();
+
     // TODO:
     // Activar programación OTA?
 
