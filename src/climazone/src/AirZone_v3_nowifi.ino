@@ -91,7 +91,7 @@ bool MASTER_MODE = true;
 bool MENU_MODE = false;
 
 // Ajustar el valor mínimo de la pantalla en modo "sleep"
-const int MIN_BACKLIGHT = 15;
+int MIN_BACKLIGHT = 15;
 
 void setup() {
   
@@ -146,6 +146,7 @@ void load_data_eeprom()
 
   MASTER_MODE = preferences.getBool("master_mode", false);
   temp_offset = preferences.getFloat("temp_offset", 0.0f);
+  MIN_BACKLIGHT = preferences.getInt("min_backlight", MIN_BACKLIGHT);
 
   // Load touch screen calibration
   calData[0] = preferences.getUShort("caldata_0", calData_[0]);
@@ -164,6 +165,7 @@ void save_data_eeprom()
 
   preferences.putBool("master_mode", MASTER_MODE);
   preferences.putFloat("temp_offset", temp_offset);
+  preferences.putInt("min_backlight", MIN_BACKLIGHT);
 
   // Save touch screen calibration
   preferences.putUShort("caldata_0", calData[0]);
@@ -423,41 +425,76 @@ bool get_pressed_point(long now, uint16_t* x, uint16_t* y)
   return pressed;
 }
 
+int currMenuPage = 0;
+const int MenuPages = 2;
+
 void handle_menu_screen(long now)
 {
     // TODO:
     // Añadir histéresis
 
+    // Dibujo zona común
     tft.setTextFont(2);
     tft.setTextColor(FRONT_COL, BACK_COL);
-    tft.drawString("Temp. Offset", 20, 20);
-    tft.drawString("Master mode", 20, 50);
-    tft.drawString("Calibrate", 20, 80);
-    tft.drawString("Reset Calib.", 20, 110);
-    tft.drawString("Restart", 20, 140);
+
     tft.drawString("Exit", 20, 200);
 
-    tft.drawFloat(temp_offset, 1, 230, 20);
-    MASTER_MODE ? tft.drawString("Yes", 230, 50) : tft.drawString(" No ", 230, 50);
+    // Dibujamos control páginas
+    tft.drawNumber(currMenuPage+1, 150, 200);
+    tft.drawString("/", 165, 200);
+    tft.drawNumber(MenuPages, 180, 200);
 
-    int x1 = 200;
-    int x2 = 290;
-    int y_pos[] = {20, 50};
+    int page_arr_x[] = {120, 210};
+    int page_arr_y = 200;
     // Dibujamos controles
-    for (int i = 0; i < 2; i++) {
-        tft.fillTriangle(x1, y_pos[i], x1, y_pos[i]+16, x1-10, y_pos[i]+8, FRONT_COL);
-        tft.fillTriangle(x2, y_pos[i], x2, y_pos[i]+16, x2+10, y_pos[i]+8, FRONT_COL);
-    }
+    tft.fillTriangle(page_arr_x[0], page_arr_y, page_arr_x[0], page_arr_y+16, page_arr_x[0]-10, page_arr_y+8, FRONT_COL);
+    tft.fillTriangle(page_arr_x[1], page_arr_y, page_arr_x[1], page_arr_y+16, page_arr_x[1]+10, page_arr_y+8, FRONT_COL);
+    
 
+    // Draw page content
+    if (currMenuPage == 0)
+    {
+      tft.drawString("Temp. Offset", 20, 20);
+      tft.drawString("Master mode", 20, 50);
+      tft.drawString("Min backlight", 20, 80);
+      //tft.drawString("Calibrate", 20, 80);
+      //tft.drawString("Reset Calib.", 20, 110);
+      //tft.drawString("Restart", 20, 140);
+      
+      tft.drawFloat(temp_offset, 1, 230, 20);
+      MASTER_MODE ? tft.drawString("Yes", 230, 50) : tft.drawString(" No ", 230, 50);
+      tft.drawNumber(MIN_BACKLIGHT, 230, 80);
+
+      int x1 = 200;
+      int x2 = 290;
+      int y_pos[] = {20, 50, 80};
+      // Dibujamos controles
+      for (int i = 0; i < 3; i++) {
+          tft.fillTriangle(x1, y_pos[i], x1, y_pos[i]+16, x1-10, y_pos[i]+8, FRONT_COL);
+          tft.fillTriangle(x2, y_pos[i], x2, y_pos[i]+16, x2+10, y_pos[i]+8, FRONT_COL);
+      }
+    }
+    else if (currMenuPage == 1)
+    {
+      tft.drawString("Calibrate touch", 20, 20);
+      tft.drawString("Reset Calib.", 20, 50);
+      tft.drawString("Configure WiFi", 20, 80);
+      tft.drawString("Restart", 20, 110);
+    }
+    
+    // Check press event
     bool pressed = false;
     uint16_t x = 0, y = 0; // To store the touch coordinates
-    
     if (now - lastTouch > 200) pressed = get_pressed_point(now, &x, &y);
 
+    
     bool pressed_exit = false;
     bool pressed_calibrate = false;
     bool pressed_reset_calib = false;
-    
+    bool pressed_set_wifi = false;
+    bool pressed_prev_page = false;
+    bool pressed_next_page = false;
+
     // Eventos táctiles
     if (pressed) 
     {
@@ -466,32 +503,64 @@ void handle_menu_screen(long now)
         // Botón Exit
         if (x >= 20 && x <= 75 && y >= 200 && y <= 216) pressed_exit = true;
 
-        // Control offset temperatura
-        if (x >= x1 - 10 && x <= x1 && y >= y_pos[0] && y <= y_pos[0] + 16) {
-            tft.fillRect(210, 20, 280, 16, BACK_COL);
-            temp_offset -= 0.1;
+        // Controles de página
+        if (x >= page_arr_x[0] - 10 && x <= page_arr_x[0] && y >= page_arr_y && y <= page_arr_y + 16) {
+            pressed_prev_page = true;
         }
-        if (x >= x2 && x <= x2 + 10 && y >= y_pos[0] && y <= y_pos[0] + 16) {
-            tft.fillRect(210, 20, 280, 16, BACK_COL);
-            temp_offset += 0.1;
+        if (x >= page_arr_x[1] && x <= page_arr_x[1] + 10 && y >= page_arr_y && y <= page_arr_y + 16) {
+            pressed_next_page = true;
         }
 
-        // Control offset temperatura
-        if (x >= x1 - 10 && x <= x1 && y >= y_pos[1] && y <= y_pos[1] + 16) MASTER_MODE = !MASTER_MODE;
-        if (x >= x2 && x <= x2 + 10 && y >= y_pos[1] && y <= y_pos[1] + 16) MASTER_MODE = !MASTER_MODE;
+        if (currMenuPage == 0)
+        {
+          // Control offset temperatura
+          int x1 = 200;
+          int x2 = 290;
+          int y_pos[] = {20, 50, 80};
+          if (x >= x1 - 10 && x <= x1 && y >= y_pos[0] && y <= y_pos[0] + 16) {
+              tft.fillRect(210, 20, 280, 16, BACK_COL);
+              temp_offset -= 0.1;
+          }
+          if (x >= x2 && x <= x2 + 10 && y >= y_pos[0] && y <= y_pos[0] + 16) {
+              tft.fillRect(210, 20, 280, 16, BACK_COL);
+              temp_offset += 0.1;
+          }
 
-        // Calibrate
-        if (x >= 20 && x <= 100 && y >= 80 && y <= 80 + 16) pressed_calibrate = true;
+          // Control modo maestro
+          if (x >= x1 - 10 && x <= x1 && y >= y_pos[1] && y <= y_pos[1] + 16) MASTER_MODE = !MASTER_MODE;
+          if (x >= x2 && x <= x2 + 10 && y >= y_pos[1] && y <= y_pos[1] + 16) MASTER_MODE = !MASTER_MODE;
 
-        // Reset calib
-        if (x >= 20 && x <= 100 && y >= 110 && y <= 110 + 16) pressed_reset_calib = true;
-
-        // Restart
-        if (x >= 20 && x <= 100 && y >= 140 && y <= 140 + 16) {
-            Serial.println("Restarting...");
-            sleep(1);
-            ESP.restart();
+          // Control del backlight
+          if (x >= x1 - 10 && x <= x1 && y >= y_pos[2] && y <= y_pos[2] + 16) {
+              tft.fillRect(210, 80, 280, 16, BACK_COL);
+              MIN_BACKLIGHT--; 
+              if (MIN_BACKLIGHT < 0) MIN_BACKLIGHT = 0;
+          }
+          if (x >= x2 && x <= x2 + 10 && y >= y_pos[2] && y <= y_pos[2] + 16) {
+              tft.fillRect(210, 80, 280, 16, BACK_COL);
+              MIN_BACKLIGHT++;
+              if (MIN_BACKLIGHT > 255) MIN_BACKLIGHT = 255;
+          }
         }
+        else if (currMenuPage == 1)
+        {
+          // Calibrate
+          if (x >= 20 && x <= 120 && y >= 20 && y <= 20 + 16) pressed_calibrate = true;
+
+          // Reset calib
+          if (x >= 20 && x <= 100 && y >= 50 && y <= 50 + 16) pressed_reset_calib = true;
+
+          // Set WiFi
+          if (x >= 20 && x <= 100 && y >= 80 && y <= 80 + 16) pressed_set_wifi = true;
+
+          // Restart
+          if (x >= 20 && x <= 100 && y >= 110 && y <= 110 + 16) {
+              Serial.println("Restarting...");
+              sleep(1);
+              ESP.restart();
+          }
+        }
+        
     }
 
     if (pressed_exit) {
@@ -508,9 +577,30 @@ void handle_menu_screen(long now)
         return;
     }
 
+    if (pressed_set_wifi) {
+      tft.fillScreen(BACK_COL);
+      Serial.println("Setting wifi connection");
+      // enable wifi
+      // set webpage
+      return;
+    }
+
     if (pressed_reset_calib) {
         for (int i = 0; i < 5; i++) calData[i] = calData_[i];
         tft.setTouch(calData);
+    }
+
+    if (pressed_next_page) 
+    {
+      currMenuPage++;
+      if (currMenuPage >= MenuPages) currMenuPage = 0;
+      tft.fillScreen(BACK_COL);
+    }
+    if (pressed_prev_page)
+    {
+      currMenuPage--;
+      if (currMenuPage < 0) currMenuPage = MenuPages - 1;
+      tft.fillScreen(BACK_COL);
     }
 
 }
