@@ -6,6 +6,7 @@
 #include <TFT_eSPI.h>
 
 #include <WiFi.h>
+#include <WebServer.h>
 #include <PubSubClient.h>
 #include <Preferences.h>
 
@@ -14,15 +15,15 @@
 #define WDT_TIMEOUT 120
 
 
-const char* ssid     = "Casa";
-const char* password = "*******";
+
 
 Adafruit_BME280 bmp;
 TFT_eSPI tft = TFT_eSPI();       // Invoke custom library
 OneWire oneWire(32);
 DallasTemperature temp_sensor(&oneWire);
-WiFiClient wifi_client;
-PubSubClient mqtt_client(wifi_client);
+WebServer web_server(80);
+//WiFiClient wifi_client;
+//PubSubClient mqtt_client(wifi_client);
 
 float temp_offset = 0.0;
 float temp = 21.0;
@@ -45,9 +46,6 @@ long lastMeas = -10000;
 long lastTouch = 0;
 long lastOnOff = 0;
 
-const bool ACTIVE_WIFI = false;
-
-#define mqtt_server "192.168.31.61"
 
 #define humidity_topic "sensor/humidity"
 #define temperature_topic "sensor/temperature"
@@ -88,10 +86,24 @@ const uint32_t GRAY_COL = darkMode ? TFT_DARKGREY : TFT_LIGHTGREY;
 
 
 bool MASTER_MODE = true;
-bool MENU_MODE = false;
+
+// Variables del menú
+enum MenuModes { MAIN_SCREEN, MENU, WIFI_SETUP};
+MenuModes MENU_MODE = MAIN_SCREEN;
+int currMenuPage = 0;
+const int MenuPages = 2;
 
 // Ajustar el valor mínimo de la pantalla en modo "sleep"
 int MIN_BACKLIGHT = 15;
+
+
+// Internet settings
+String Wifi_ssid;
+String Wifi_password;
+String Sinric_key;
+String Sinric_secret;
+String Device_id;
+String Device_name;
 
 void setup() {
   
@@ -127,12 +139,9 @@ void setup() {
   tft.fillScreen(BACK_COL);
   while (!Serial && (millis() <= 1000));
 
-  if (ACTIVE_WIFI)
-  {
-    setup_wifi();
-    mqtt_client.setServer(mqtt_server, 1883);
-    mqtt_client.setCallback(callback);
-  }
+  // Connect to wifi
+  init_wifi();
+
 
   draw_onoff_button();
 }
@@ -155,6 +164,14 @@ void load_data_eeprom()
   calData[3] = preferences.getUShort("caldata_3", calData_[3]);
   calData[4] = preferences.getUShort("caldata_4", calData_[4]);
 
+  // Load internet settings
+  Wifi_ssid = preferences.getString("wifi_ssid", "");
+  Wifi_password = preferences.getString("wifi_password", "");
+  Sinric_key = preferences.getString("sinric_key", "");
+  Sinric_secret = preferences.getString("sinric_secret", "");
+  Device_id = preferences.getString("device_id", "");
+  Device_name = preferences.getString("device_name", "");
+
   preferences.end();
 }
 
@@ -174,14 +191,24 @@ void save_data_eeprom()
   preferences.putUShort("caldata_3", calData[3]);
   preferences.putUShort("caldata_4", calData[4]);
 
+  // Load internet settings
+  preferences.putString("wifi_ssid", Wifi_ssid);
+  preferences.putString("wifi_password", Wifi_password);
+  preferences.putString("sinric_key", Sinric_key);
+  preferences.putString("sinric_secret", Sinric_secret);
+  preferences.putString("device_id", Device_id);
+  preferences.putString("device_name", Device_name);
+
   preferences.end();
 }
 
-void setup_wifi()
+void init_wifi()
 {
+  if (Wifi_ssid == "") return; // Check that there is a network defined
+
   Serial.print("Connecting to ");
-  Serial.println(ssid);
-  WiFi.begin(ssid, password);
+  Serial.println(Wifi_ssid);
+  WiFi.begin(Wifi_ssid, Wifi_password);
 
   while (WiFi.status() != WL_CONNECTED) {
     delay(500);
@@ -247,49 +274,6 @@ void calibrate_touch()
 
     delay(500);
     tft.fillScreen(BACK_COL);
-}
-
-void reconnect_mqtt() 
-{
-  Serial.print("Attempting MQTT connection...");
-  if (mqtt_client.connect("ESP8266Client", "esp32", "esp32")) 
-  //if (mqtt_client.connect("ESP8266Client", mqtt_user, mqtt_password))
-  {
-      Serial.println("connected");
-
-      mqtt_client.subscribe("esp32/output");
-  } else {
-      Serial.print("failed, rc=");
-      Serial.println(mqtt_client.state());
-  }
-}
-
-void callback(char* topic, byte* message, unsigned int length)
-{
-  Serial.print("Message arrived on topic: ");
-  Serial.print(topic);
-  Serial.print(". Message: ");
-  String messageTemp;
-  
-  for (int i = 0; i < length; i++) {
-    Serial.print((char)message[i]);
-    messageTemp += (char)message[i];
-  }
-  Serial.println();
-
-  // If a message is received on the topic esp32/output, you check if the message is either "on" or "off". 
-  // Changes the output state according to the message
-  if (String(topic) == "esp32/output") {
-    Serial.print("Changing output to ");
-    if(messageTemp == "on"){
-      Serial.println("on");
-      //digitalWrite(ledPin, HIGH);
-    }
-    else if(messageTemp == "off"){
-      Serial.println("off");
-      //digitalWrite(ledPin, LOW);
-    }
-  }
 }
 
 void draw_onoff_button()
@@ -425,9 +409,6 @@ bool get_pressed_point(long now, uint16_t* x, uint16_t* y)
   return pressed;
 }
 
-int currMenuPage = 0;
-const int MenuPages = 2;
-
 void handle_menu_screen(long now)
 {
     // TODO:
@@ -435,9 +416,9 @@ void handle_menu_screen(long now)
 
     // Dibujo zona común
     tft.setTextFont(2);
-    tft.setTextColor(FRONT_COL, BACK_COL);
-
+    tft.setTextColor(TFT_RED, BACK_COL);
     tft.drawString("Exit", 20, 200);
+    tft.setTextColor(FRONT_COL, BACK_COL);
 
     // Dibujamos control páginas
     tft.drawNumber(currMenuPage+1, 150, 200);
@@ -457,10 +438,7 @@ void handle_menu_screen(long now)
       tft.drawString("Temp. Offset", 20, 20);
       tft.drawString("Master mode", 20, 50);
       tft.drawString("Min backlight", 20, 80);
-      //tft.drawString("Calibrate", 20, 80);
-      //tft.drawString("Reset Calib.", 20, 110);
-      //tft.drawString("Restart", 20, 140);
-      
+     
       tft.drawFloat(temp_offset, 1, 230, 20);
       MASTER_MODE ? tft.drawString("Yes", 230, 50) : tft.drawString(" No ", 230, 50);
       tft.drawNumber(MIN_BACKLIGHT, 230, 80);
@@ -566,7 +544,7 @@ void handle_menu_screen(long now)
     if (pressed_exit) {
         save_data_eeprom();
         tft.fillScreen(BACK_COL);
-        MENU_MODE = false;
+        MENU_MODE = MAIN_SCREEN;
         draw_onoff_button(); // TODO: Esto no debería estar aquí
         return;
     }
@@ -578,10 +556,7 @@ void handle_menu_screen(long now)
     }
 
     if (pressed_set_wifi) {
-      tft.fillScreen(BACK_COL);
-      Serial.println("Setting wifi connection");
-      // enable wifi
-      // set webpage
+      set_webserver();
       return;
     }
 
@@ -612,18 +587,6 @@ void handle_main_screen(long now)
 
   // Rutina para apagar la pantalla pasados 2 segundos
   bool screen_active = set_screen_backlight(lastTouch, now, false);
-
-  // Gestión de la conexión con MQTT
-  bool mqtt_active = false;
-  if (ACTIVE_WIFI)
-  {
-    mqtt_active = mqtt_client.connected();
-    if (!mqtt_active && (now - lastMqttConn) > 10000) {
-        reconnect_mqtt();
-        lastMqttConn = now;
-    }
-    if (mqtt_active) mqtt_client.loop();
-  }
 
   // Gestión de la pantalla táctil
   bool pressed = false;
@@ -718,7 +681,7 @@ void handle_main_screen(long now)
   {
     // BORRAMOS PANTALLA
     tft.fillScreen(BACK_COL);
-    MENU_MODE = true;
+    MENU_MODE = MENU;
     return;
   }
 
@@ -776,28 +739,133 @@ void handle_main_screen(long now)
 
         // Escribimos wifi, mqtt y menú
         tft.setTextFont(2);
-        if (ACTIVE_WIFI) tft.setTextColor(FRONT_COL, BACK_COL);
+        if (WiFi.isConnected()) tft.setTextColor(FRONT_COL, BACK_COL);
         else tft.setTextColor(GRAY_COL, BACK_COL);
         tft.drawString("WiFi", 20, 215);
-        if (mqtt_active) tft.setTextColor(FRONT_COL, BACK_COL);
-        else tft.setTextColor(GRAY_COL, BACK_COL);
-        tft.drawString("MQTT", 60, 215);
 
         if (pressed_menu) tft.setTextColor(TFT_RED, BACK_COL);
         else tft.setTextColor(FRONT_COL, BACK_COL);
         tft.drawString("MENU", 150, 215);
 
-        // Enviamos datos por mqtt
-        if (mqtt_active)
-        {
-            //Serial.println("Sending MQTT topics...");
-            mqtt_client.publish(temperature_topic, String(temp2).c_str(), true);
-            mqtt_client.publish(humidity_topic, String(hr).c_str(), true);
-            mqtt_client.publish(pressure_topic, String(pres).c_str(), true);
-        }
-
         lastMsg = now;
     }
+}
+
+void set_webserver()
+{
+  Serial.println("Setting wifi connection");
+  MENU_MODE = WIFI_SETUP;
+  tft.fillScreen(BACK_COL);
+
+  // Init wifi as AP
+  WiFi.mode(WIFI_AP);
+  Serial.print("Setting up WiFi AP...");
+  String ap_name = "ESP_" + WiFi.macAddress();
+  ap_name.replace(":", "_");
+  WiFi.softAP(ap_name);
+
+  IPAddress IP = WiFi.softAPIP();
+  Serial.print("AP IP address: ");
+  Serial.println(IP);
+
+  tft.setTextFont(2);
+  tft.setTextColor(FRONT_COL, BACK_COL);
+  tft.drawString("1. Connect to WiFi network:", 30, 30);
+  tft.setTextColor(TFT_GREEN, BACK_COL);
+  tft.drawString(ap_name, 30, 50);
+
+  tft.setTextColor(FRONT_COL, BACK_COL);
+  tft.drawString("2. Open web address:", 30, 80);
+  tft.setTextColor(TFT_GREEN, BACK_COL);
+  tft.drawString(IP.toString(), 30, 110);
+  tft.setTextColor(FRONT_COL, BACK_COL);
+  tft.drawString("3. Fill in form", 30, 140);
+
+  tft.setTextColor(TFT_RED, BACK_COL);
+  tft.drawString("Exit", 20, 200);
+
+  web_server.on("/", handle_OnConnect);
+  web_server.on("/post", handle_OnSubmit);
+  web_server.onNotFound(handle_NotFound);
+  web_server.begin();
+}
+
+void handle_OnConnect() {
+  Serial.println("HTML requested");
+  web_server.send(200, "text/html", SendHTML()); // 3
+}
+
+void handle_NotFound() {
+  web_server.send(404, "text/plain", "La pagina no existe");
+}
+
+void handle_OnSubmit() {
+
+  int n_args = web_server.args();
+  Serial.printf("Request got with %d args \n", n_args);
+
+  // Cogemos parámetros
+  if (n_args == 6) {
+    Wifi_ssid = web_server.arg(0);
+    Serial.printf("SSID_Name = %s\n", Wifi_ssid.c_str());
+    Wifi_password = web_server.arg(1);
+    Serial.printf("Password = %s\n", Wifi_password.c_str());
+    Sinric_key = web_server.arg(2);
+    Serial.printf("Sinric_Key = %s\n", Sinric_key.c_str());
+    Sinric_secret = web_server.arg(3);
+    Serial.printf("Sinric Secret = %s\n", Sinric_secret.c_str());
+    Device_id = web_server.arg(4);
+    Serial.printf("Device_Id = %s\n", Device_id.c_str());
+    Device_name = web_server.arg(5);
+    Serial.printf("Device_Name = %s\n", Device_name.c_str());
+  } else {
+      Serial.println("Not expected number of args");
+  }
+
+  web_server.send(200, "text/plain", "OK");
+
+  // Mostramos info en la pantalla
+  tft.fillScreen(BACK_COL);
+  tft.setTextFont(2);
+  tft.setTextColor(FRONT_COL, BACK_COL);
+  tft.drawString("Updating settings...", 30, 30);
+
+  // Guardamos la eeprom
+  save_data_eeprom();
+
+  // Cerramos el servidor web
+  web_server.close();
+  
+  // Conectamos wifi
+  tft.drawString("Connecting to WiFi...", 30, 60);
+  init_wifi();
+
+  // Volvemos a pantalla principal
+  tft.fillScreen(BACK_COL);
+  draw_onoff_button();
+  MENU_MODE = MAIN_SCREEN;
+}
+
+void handle_webserver_screen(long now)
+{
+  web_server.handleClient();
+
+  // Check press event
+  bool pressed = false;
+  uint16_t x = 0, y = 0; // To store the touch coordinates
+  if (now - lastTouch > 200) pressed = get_pressed_point(now, &x, &y);
+  // Botón Exit
+  if (x >= 20 && x <= 75 && y >= 200 && y <= 216)
+  {
+    // Cerramos el servidor web
+    web_server.close();
+  
+    // Volvemos a pantalla principal
+    tft.fillScreen(BACK_COL);
+    draw_onoff_button();
+    MENU_MODE = MAIN_SCREEN;
+    return;
+  }
 }
 
 void loop() 
@@ -809,12 +877,116 @@ void loop()
 
     long now = millis();
 
-    // MENU SCREEN
-    if (MENU_MODE == true)
+    switch (MENU_MODE)
     {
-        handle_menu_screen(now);
-        return;
+    case MAIN_SCREEN:
+      handle_main_screen(now);
+      break;
+    case MENU:
+      handle_menu_screen(now);
+      break;
+    case WIFI_SETUP:
+      handle_webserver_screen(now);
+      break;
+    default:
+      break;
     }
-    // MAIN SCREEN
-    handle_main_screen(now);
+}
+
+/*
+   Aqui esta definido todo el HTML y el CSS del servidor WEB con ESP32
+*/
+String SendHTML() {
+  // Cabecera de todas las paginas WEB
+  String ptr = R"rawliteral(
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>WiFi Settings</title>
+<style>
+    body {
+        font-family: Arial, sans-serif;
+        margin: 0;
+        padding: 0;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        height: 100vh;
+        background-color: #f2f2f2;
+    }
+    .container {
+        background-color: #fff;
+        padding: 20px;
+        border-radius: 8px;
+        box-shadow: 0px 0px 10px 0px rgba(0,0,0,0.1);
+    }
+    .form-group {
+        margin-bottom: 20px;
+    }
+    .form-group label {
+        display: block;
+        font-weight: bold;
+        margin-bottom: 5px;
+    }
+    .form-group input {
+        width: 100%;
+        padding: 10px;
+        border: 1px solid #ccc;
+        border-radius: 4px;
+        box-sizing: border-box;
+        font-size: 16px;
+    }
+    .btn-submit {
+        background-color: #4CAF50;
+        color: white;
+        padding: 10px 20px;
+        border: none;
+        border-radius: 4px;
+        cursor: pointer;
+        font-size: 16px;
+    }
+    .btn-submit:hover {
+        background-color: #45a049;
+    }
+</style>
+</head>
+<body>
+
+<div class="container">
+    <h2>WiFi Settings</h2>
+    <form id="wifi-form" action="/post">
+        <div class="form-group">
+            <label for="ssid">SSID Name:</label>
+            <input type="text" id="ssid" name="ssid" required>
+        </div>
+        <div class="form-group">
+            <label for="password">WiFi Password:</label>
+            <input type="password" id="password" name="password">
+        </div>
+        <div class="form-group">
+            <label for="app-key">Sinric App Key:</label>
+            <input type="text" id="app-key" name="app-key">
+        </div>
+        <div class="form-group">
+            <label for="app-secret">Sinric App Secret:</label>
+            <input type="text" id="app-secret" name="app-secret">
+        </div>
+        <div class="form-group">
+            <label for="device-id">Device Id:</label>
+            <input type="text" id="device-id" name="device-id">
+        </div>
+        <div class="form-group">
+            <label for="device-name">Device Name:</label>
+            <input type="text" id="device-name" name="device-name">
+        </div>
+        <button type="submit" class="btn-submit">Submit</button>
+    </form>
+</div>
+
+</body>
+</html>
+  )rawliteral"; 
+  return ptr;
 }
