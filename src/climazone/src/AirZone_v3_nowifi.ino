@@ -42,7 +42,7 @@ float set_temp = 20.0;
 
 long lastMsg = 0;
 long lastMqttConn = 0;
-long lastMeas = -10000;
+long lastMeas = -1000000;
 long lastTouch = 0;
 long lastOnOff = 0;
 
@@ -301,6 +301,7 @@ void draw_current_temp()
     tft.setTextColor(TFT_BLUE, BACK_COL);  // Text colour
     tft.setTextFont(4);
     txt_x = 200;
+    if (pres < 1000) txt_x += tft.drawString(" ", txt_x, 70); // Handle padding
     txt_x += tft.drawNumber(int(pres),txt_x, 70);
     tft.setTextFont(2);
     tft.drawString(" mbar", txt_x, 70);
@@ -342,7 +343,7 @@ bool set_screen_backlight(long lastTouch, long now, bool forced)
 
 void meas_values(long now)
 {
-    if (now - lastMeas < 5000) return;
+    if (now - lastMeas < 30000ul) return;
 
     temp_sensor.requestTemperatures(); 
     temp = bmp.readTemperature();
@@ -350,8 +351,7 @@ void meas_values(long now)
     hr = bmp.readHumidity();
     temp2 = temp_sensor.getTempCByIndex(0) + temp_offset;
 
-    Serial.print("Temp: ");
-    Serial.println(temp);
+    Serial.printf("Temp (18DS20): %.1fºC | Temp (BMP): %.1fºC | Pressure: %.0f mbar | HR: %.0f %%\n", temp2, temp, pres, hr);
     
     lastMeas = now;
 }
