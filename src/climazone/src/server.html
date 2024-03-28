@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>WiFi Settings</title>
+<style>
+    body {
+        font-family: Arial, sans-serif;
+        margin: 0;
+        padding: 0;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        height: 100vh;
+        background-color: #f2f2f2;
+    }
+    .container {
+        background-color: #fff;
+        padding: 20px;
+        border-radius: 8px;
+        box-shadow: 0px 0px 10px 0px rgba(0,0,0,0.1);
+    }
+    .form-group {
+        margin-bottom: 20px;
+    }
+    .form-group label {
+        display: block;
+        font-weight: bold;
+        margin-bottom: 5px;
+    }
+    .form-group input {
+        width: 100%;
+        padding: 10px;
+        border: 1px solid #ccc;
+        border-radius: 4px;
+        box-sizing: border-box;
+        font-size: 16px;
+    }
+    .btn-submit {
+        background-color: #4CAF50;
+        color: white;
+        padding: 10px 20px;
+        border: none;
+        border-radius: 4px;
+        cursor: pointer;
+        font-size: 16px;
+    }
+    .btn-submit:hover {
+        background-color: #45a049;
+    }
+</style>
+</head>
+<body>
+
+<div class="container">
+    <h2>WiFi Settings</h2>
+    <form id="wifi-form">
+        <div class="form-group">
+            <label for="ssid">SSID Name:</label>
+            <input type="text" id="ssid" name="ssid" required>
+        </div>
+        <div class="form-group">
+            <label for="password">WiFi Password:</label>
+            <input type="password" id="password" name="password" required>
+        </div>
+        <div class="form-group">
+            <label for="app-key">Sinric App Key:</label>
+            <input type="text" id="app-key" name="app-key">
+        </div>
+        <div class="form-group">
+            <label for="app-secret">Sinric App Secret:</label>
+            <input type="text" id="app-secret" name="app-secret">
+        </div>
+        <div class="form-group">
+            <label for="device-id">Device Id:</label>
+            <input type="text" id="device-id" name="device-id">
+        </div>
+        <div class="form-group">
+            <label for="device-name">Device Name:</label>
+            <input type="text" id="device-name" name="device-name">
+        </div>
+        <button type="submit" class="btn-submit">Submit</button>
+    </form>
+</div>
+
+</body>
+</html>
