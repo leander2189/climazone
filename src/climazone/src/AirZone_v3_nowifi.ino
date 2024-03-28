@@ -7,10 +7,12 @@
 
 #include <WiFi.h>
 #include <WebServer.h>
-#include <PubSubClient.h>
 #include <Preferences.h>
 
 #include <esp_task_wdt.h>
+
+#include <SinricPro.h>
+#include <SinricProThermostat.h>
 
 #define WDT_TIMEOUT 120
 
@@ -22,15 +24,13 @@ TFT_eSPI tft = TFT_eSPI();       // Invoke custom library
 OneWire oneWire(32);
 DallasTemperature temp_sensor(&oneWire);
 WebServer web_server(80);
-//WiFiClient wifi_client;
-//PubSubClient mqtt_client(wifi_client);
+
 
 float temp_offset = 0.0;
 float temp = 21.0;
 float temp2 = 22.0;
 float pres = 1013;
 float hr = 50.0;
-int counter = 0;
 
 
 // Factory settings for screen calib
@@ -41,17 +41,14 @@ uint16_t calData[5];
 float set_temp = 20.0;
 
 long lastMsg = 0;
-long lastMqttConn = 0;
 long lastMeas = -1000000;
 long lastTouch = 0;
 long lastOnOff = 0;
 
+long lastSent_Temp = 0;
+long lastSent_SetTemp = 0;
+float last_SetTemp = 0;
 
-#define humidity_topic "sensor/humidity"
-#define temperature_topic "sensor/temperature"
-#define pressure_topic "sensor/pressure"
-
-//#define EEPROM_SIZE 32
 Preferences preferences;
 
 // Salidas digitales
@@ -67,7 +64,7 @@ const int screenBL = 25;
 bool airzone_active = false;
 bool touch_debug = false;
 
-bool pressed_onoff = false;
+
 int ClimaMode = 0; // 0 ninguno, 1 frío, 2 calor
 
 #define LEDC_CHANNEL_0     0
@@ -104,6 +101,7 @@ String Sinric_key;
 String Sinric_secret;
 String Device_id;
 String Device_name;
+
 
 void setup() {
   
@@ -142,10 +140,14 @@ void setup() {
   // Connect to wifi
   init_wifi();
 
+  // Connect to Sinric
+  init_sinric();
+
 
   draw_onoff_button();
 }
 
+// Configuration settings
 void load_data_eeprom()
 {
   if (!preferences.begin("settings", false))
@@ -202,52 +204,15 @@ void save_data_eeprom()
   preferences.end();
 }
 
-void init_wifi()
+// Touch screen
+bool get_pressed_point(long now, uint16_t* x, uint16_t* y)
 {
-  if (Wifi_ssid == "") return; // Check that there is a network defined
+  // Pressed will be set true is there is a valid touch on the screen
+  const uint16_t threshold = 600u;
+  bool pressed = tft.getTouch(x, y, threshold);
+  if (pressed) lastTouch = now;
 
-  Serial.print("Connecting to ");
-  Serial.println(Wifi_ssid);
-  WiFi.begin(Wifi_ssid, Wifi_password);
-
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(500);
-    Serial.print(".");
-  }
-
-  Serial.println("");
-  Serial.println("WiFi connected");
-  Serial.println("IP address: ");
-  Serial.println(WiFi.localIP());
-}
-
-void get_touch_averaged(int max_touches, float &x, float &y)
-{
-  int touch_count = 0;
-  float _x = 0, _y = 0;
-  
-  /*
-  while (touch_count < max_touches)
-  {
-    if (ts.touched()) 
-    {
-      //TS_Point p = ts.getPoint();
-      _x += p.x;
-      _y += p.y;
-      touch_count++;
-
-      Serial.print("Calib point: x = ");
-      Serial.print(p.x);
-      Serial.print(", y = ");
-      Serial.print(p.y);
-      Serial.println();
-    }
-    delay(100);
-  }
-  */
-  
-  x = _x/max_touches;
-  y = _y/max_touches;
+  return pressed;
 }
 
 void calibrate_touch()
@@ -276,9 +241,10 @@ void calibrate_touch()
     tft.fillScreen(BACK_COL);
 }
 
+// Drawing utilities
 void draw_onoff_button()
 {
-    uint32_t onoff_color = pressed_onoff ? TFT_RED : GRAY_COL;
+    uint32_t onoff_color = airzone_active ? FRONT_COL : GRAY_COL;
     tft.fillCircle(280, 210, 17, onoff_color);
     tft.fillCircle(280, 210, 13, BACK_COL);
     tft.fillRect(280-3, 210-20, 6, 10, BACK_COL);
@@ -314,46 +280,6 @@ void draw_current_temp()
     tft.setTextFont(2);
     tft.drawString(" %HR", txt_x, 100);
   
-}
-
-bool set_screen_backlight(long lastTouch, long now, bool forced)
-{
-  if (forced) {
-    ledcWrite(LEDC_CHANNEL_0, 255);
-    return true;
-  }
-
-  const long t1 = 5000;
-  const long t2 = t1 + 3000;
-
-  if (now - lastTouch < t1) {
-    ledcWrite(LEDC_CHANNEL_0, 255);
-    return true;
-  }
-  else if (now - lastTouch < t2) {
-    float y = 255 - (255 - MIN_BACKLIGHT)*(now - lastTouch - t1)/(float)(t2 - t1);
-    ledcWrite(LEDC_CHANNEL_0, (int)y);
-    return true;
-  }
-  else {
-    ledcWrite(LEDC_CHANNEL_0, MIN_BACKLIGHT);
-    return false;
-  }
-}
-
-void meas_values(long now)
-{
-    if (now - lastMeas < 30000ul) return;
-
-    temp_sensor.requestTemperatures(); 
-    temp = bmp.readTemperature();
-    pres = bmp.readPressure()/100;
-    hr = bmp.readHumidity();
-    temp2 = temp_sensor.getTempCByIndex(0) + temp_offset;
-
-    Serial.printf("Temp (18DS20): %.1fºC | Temp (BMP): %.1fºC | Pressure: %.0f mbar | HR: %.0f %%\n", temp2, temp, pres, hr);
-    
-    lastMeas = now;
 }
 
 void draw_sun(int x0, int y0, int r, uint32_t color)
@@ -399,14 +325,44 @@ void draw_snow(int x0, int y0, int r, uint32_t color)
 
 }
 
-bool get_pressed_point(long now, uint16_t* x, uint16_t* y)
+bool set_screen_backlight(long lastTouch, long now, bool forced)
 {
-  // Pressed will be set true is there is a valid touch on the screen
-  const uint16_t threshold = 600u;
-  bool pressed = tft.getTouch(x, y, threshold);
-  if (pressed) lastTouch = now;
+  if (forced) {
+    ledcWrite(LEDC_CHANNEL_0, 255);
+    return true;
+  }
 
-  return pressed;
+  const long t1 = 5000;
+  const long t2 = t1 + 3000;
+
+  if (now - lastTouch < t1) {
+    ledcWrite(LEDC_CHANNEL_0, 255);
+    return true;
+  }
+  else if (now - lastTouch < t2) {
+    float y = 255 - (255 - MIN_BACKLIGHT)*(now - lastTouch - t1)/(float)(t2 - t1);
+    ledcWrite(LEDC_CHANNEL_0, (int)y);
+    return true;
+  }
+  else {
+    ledcWrite(LEDC_CHANNEL_0, MIN_BACKLIGHT);
+    return false;
+  }
+}
+
+void meas_values(long now)
+{
+    if (now - lastMeas < 30000ul) return;
+
+    temp_sensor.requestTemperatures(); 
+    temp = bmp.readTemperature();
+    pres = bmp.readPressure()/100;
+    hr = bmp.readHumidity();
+    temp2 = temp_sensor.getTempCByIndex(0) + temp_offset;
+
+    Serial.printf("Temp (18DS20): %.1fºC | Temp (BMP): %.1fºC | Pressure: %.0f mbar | HR: %.0f %%\n", temp2, temp, pres, hr);
+    
+    lastMeas = now;
 }
 
 void handle_menu_screen(long now)
@@ -580,29 +536,39 @@ void handle_menu_screen(long now)
 
 }
 
+void set_airzone_active(bool active)
+{
+  airzone_active = active;
+
+  if (!active)
+      tft.fillRect(0, 0, 160, 200, BACK_COL); // Si apagamos, borramos los controles del termostato
+
+  draw_onoff_button();
+}
+
+bool get_airzone_active() { return airzone_active; }
+
 void handle_main_screen(long now)
 {
  // Actualizamos medición de valores
   meas_values(now);
+  send_sinric_temp(temp2, hr, now);
 
   // Rutina para apagar la pantalla pasados 2 segundos
   bool screen_active = set_screen_backlight(lastTouch, now, false);
 
   // Gestión de la pantalla táctil
   bool pressed = false;
-  bool touch_activated = true;
   uint16_t x = 0, y = 0; // To store the touch coordinates
-  
-  if (now -lastTouch > 200) pressed = get_pressed_point(now, &x, &y);
+  if (now - lastTouch > 200) pressed = get_pressed_point(now, &x, &y);
 
   bool pressed_up = false;
   bool pressed_down = false;
   bool pressed_menu = false;
   bool pressed_cold = false;
   bool pressed_hot = false;
-
-  bool draw_onoff = false;
-
+  bool pressed_onoff = false;
+  
   // Eventos táctiles
   if (pressed && screen_active) 
   {
@@ -618,29 +584,24 @@ void handle_main_screen(long now)
 
     // Encendido/Apagado: sólo permitimos una acción cada 2seg.
     if (x >= 280-17 && x <= 280+16 && y >= 210-17 && y <= 210+17 && now-lastOnOff > 2000) {
-      if (!pressed_onoff) draw_onoff = true;
+      //if (!pressed_onoff) draw_onoff = true;
       pressed_onoff = true;
       lastOnOff = now;
     }
   }
-  else
-  {
-    if (pressed_onoff) {
-      pressed_onoff = false;
-      draw_onoff = true;
-    }
-  }
 
   if (pressed_onoff) {
-    airzone_active = !airzone_active;
+    set_airzone_active(!get_airzone_active());
+    sent_sinric_power(get_airzone_active());
   }
 
   // Gestión del modo frío/calor
   if (pressed_cold) ClimaMode = 1;
   else if (pressed_hot) ClimaMode = 2;
+  if (pressed_cold || pressed_hot) send_sinric_mode(ClimaMode);
 
   // Gestión de la temperatura del termostato
-  if (airzone_active)
+  if (get_airzone_active())
   {
       if (pressed_up) set_temp += 0.5;
       if (pressed_down) set_temp -= 0.5;
@@ -655,26 +616,14 @@ void handle_main_screen(long now)
       // Demanda de calor
       if (temp2 < set_temp - 0.1)  digitalWrite(outQ2, HIGH);
       else digitalWrite(outQ2, LOW);
+
+      send_sinric_set_temp(set_temp, now);
   }
   else
   {
     digitalWrite(outQ1, LOW);
     digitalWrite(outQ2, LOW);
   }
-
-
-  // Gestión y dibujado del botón de encendido
-  if (draw_onoff)
-  {
-    draw_onoff_button();
-
-    if (!airzone_active)
-      tft.fillRect(0, 0, 160, 200, BACK_COL); // Si apagamos, borramos los controles del termostato
-  }
-
-  
-  // Comprobamos si es necesario limpiar la pantalla
-  //if (screen_redraw) tft.fillScreen(TFT_WHITE);
 
   // Gestión del menu
   if (pressed_menu) 
@@ -686,7 +635,7 @@ void handle_main_screen(long now)
   }
 
   // Dibujamos controles del termostato
-  if (airzone_active)
+  if (get_airzone_active())
   {
     const int tX1 = 15;
     const int tW = 60;
@@ -737,7 +686,7 @@ void handle_main_screen(long now)
     {
         draw_current_temp();
 
-        // Escribimos wifi, mqtt y menú
+        // Escribimos wifi, menú
         tft.setTextFont(2);
         if (WiFi.isConnected()) tft.setTextColor(FRONT_COL, BACK_COL);
         else tft.setTextColor(GRAY_COL, BACK_COL);
@@ -751,6 +700,52 @@ void handle_main_screen(long now)
     }
 }
 
+void loop() 
+{
+    esp_task_wdt_reset();
+
+    // TODO:
+    // Activar programación OTA?
+    SinricPro.handle();
+
+    long now = millis();
+
+    switch (MENU_MODE)
+    {
+    case MAIN_SCREEN:
+      handle_main_screen(now);
+      break;
+    case MENU:
+      handle_menu_screen(now);
+      break;
+    case WIFI_SETUP:
+      handle_webserver_screen(now);
+      break;
+    default:
+      break;
+    }
+}
+
+// Funciones de conectividad
+void init_wifi()
+{
+  if (Wifi_ssid == "") return; // Check that there is a network defined
+
+  Serial.print("Connecting to ");
+  Serial.println(Wifi_ssid);
+  WiFi.begin(Wifi_ssid, Wifi_password);
+
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+
+  Serial.println("");
+  Serial.println("WiFi connected");
+  Serial.println("IP address: ");
+  Serial.println(WiFi.localIP());
+}
+
 void set_webserver()
 {
   Serial.println("Setting wifi connection");
@@ -758,7 +753,7 @@ void set_webserver()
   tft.fillScreen(BACK_COL);
 
   // Init wifi as AP
-  WiFi.mode(WIFI_AP);
+  WiFi.mode(WIFI_MODE_AP);
   Serial.print("Setting up WiFi AP...");
   String ap_name = "ESP_" + WiFi.macAddress();
   ap_name.replace(":", "_");
@@ -790,16 +785,19 @@ void set_webserver()
   web_server.begin();
 }
 
-void handle_OnConnect() {
+void handle_OnConnect() 
+{
   Serial.println("HTML requested");
   web_server.send(200, "text/html", SendHTML()); // 3
 }
 
-void handle_NotFound() {
+void handle_NotFound()
+{
   web_server.send(404, "text/plain", "La pagina no existe");
 }
 
-void handle_OnSubmit() {
+void handle_OnSubmit()
+{
 
   int n_args = web_server.args();
   Serial.printf("Request got with %d args \n", n_args);
@@ -839,6 +837,7 @@ void handle_OnSubmit() {
   // Conectamos wifi
   tft.drawString("Connecting to WiFi...", 30, 60);
   init_wifi();
+  init_sinric();
 
   // Volvemos a pantalla principal
   tft.fillScreen(BACK_COL);
@@ -868,35 +867,8 @@ void handle_webserver_screen(long now)
   }
 }
 
-void loop() 
+String SendHTML() 
 {
-    esp_task_wdt_reset();
-
-    // TODO:
-    // Activar programación OTA?
-
-    long now = millis();
-
-    switch (MENU_MODE)
-    {
-    case MAIN_SCREEN:
-      handle_main_screen(now);
-      break;
-    case MENU:
-      handle_menu_screen(now);
-      break;
-    case WIFI_SETUP:
-      handle_webserver_screen(now);
-      break;
-    default:
-      break;
-    }
-}
-
-/*
-   Aqui esta definido todo el HTML y el CSS del servidor WEB con ESP32
-*/
-String SendHTML() {
   // Cabecera de todas las paginas WEB
   String ptr = R"rawliteral(
 <!DOCTYPE html>
@@ -990,3 +962,95 @@ String SendHTML() {
   )rawliteral"; 
   return ptr;
 }
+
+// Funciones de Sinric
+void init_sinric() 
+{
+  SinricProThermostat &myThermostat = SinricPro[Device_id];
+  myThermostat.onPowerState(onPowerState);
+  myThermostat.onTargetTemperature(onTargetTemperature);
+  myThermostat.onAdjustTargetTemperature(onAdjustTargetTemperature);
+  myThermostat.onThermostatMode(onThermostatMode);
+
+  // setup SinricPro
+  SinricPro.onConnected([](){ Serial.println("[Sinric] Connected to SinricPro"); }); 
+  SinricPro.onDisconnected([](){ Serial.println("[Sinric] Disconnected from SinricPro"); });
+  Serial.printf("Sinric Key: %s\n", Sinric_key.c_str());
+  Serial.printf("Sinric secret: %s\n", Sinric_secret.c_str());
+  Serial.printf("Sinric device id: %s\n", Device_id.c_str());
+  SinricPro.begin(Sinric_key, Sinric_secret);
+}
+
+bool onPowerState(const String &deviceId, bool &state) 
+{
+  set_airzone_active(state);
+  Serial.printf("[Sinric] Thermostat %s turned %s\r\n", deviceId.c_str(), state ?"on":"off");
+
+  return true; // request handled properly
+}
+
+bool onTargetTemperature(const String &deviceId, float &temperature) 
+{
+  set_temp = temperature;
+  Serial.printf("[Sinric] Thermostat %s set temperature to %f\r\n", deviceId.c_str(), temperature);
+
+  return true;
+}
+
+bool onAdjustTargetTemperature(const String & deviceId, float &temperatureDelta) 
+{
+  set_temp += temperatureDelta;  // calculate absolut temperature
+  Serial.printf("Thermostat %s changed temperature about %f to %f", deviceId.c_str(), temperatureDelta, set_temp);
+
+  return true;
+}
+
+bool onThermostatMode(const String &deviceId, String &mode) {
+  Serial.printf("Thermostat %s set to mode %s\r\n", deviceId.c_str(), mode.c_str());
+
+  if (mode == "HEAT") ClimaMode = 2;
+  if (mode == "COOL") ClimaMode = 1;
+  //lastTouch = millis();
+
+  return true;
+}
+
+void sent_sinric_power(bool active)
+{
+  // send powerstate event
+  SinricProThermostat &myThermostat = SinricPro[Device_id];
+  myThermostat.sendPowerStateEvent(active); // send the new powerState to SinricPro server
+}
+
+void send_sinric_temp(float temp, float hr, long now) 
+{
+  if (now - lastSent_Temp < 60000) return;  
+  //if (temp2 == lastemp2 || hr == lasthr) return; // if no values changed do nothing...
+  SinricProThermostat &myThermostat = SinricPro[Device_id];
+  bool res = myThermostat.sendTemperatureEvent(temp, hr);
+  if (!res) Serial.println("[Sinric] Send Temp event failed");
+
+  //lastemp2 = temp2;  // save actual temperature for next compare
+  //lasthr = hr;        // save actual humidity for next compare
+  lastSent_Temp = now;       // save actual time for next compare
+}
+
+void send_sinric_set_temp(float temp, long now) 
+{
+  if (now - lastSent_SetTemp < 30000) return;  
+  if (abs(temp - last_SetTemp) < 0.1) return; // if no values changed do nothing...
+
+  SinricProThermostat &myThermostat = SinricPro[Device_id];
+  myThermostat.sendTargetTemperatureEvent(temp);
+
+  last_SetTemp = temp;  // save actual temperature for next compare
+  lastSent_SetTemp = now;       // save actual time for next compare
+}
+
+void send_sinric_mode(int mode)
+{
+  SinricProThermostat &myThermostat = SinricPro[Device_id];
+  if (mode == 1) myThermostat.sendThermostatModeEvent("COOL");
+  else if (mode == 2) myThermostat.sendThermostatModeEvent("HEAT");
+}
+
