@@ -14,6 +14,8 @@
 #include <SinricPro.h>
 #include <SinricProThermostat.h>
 
+#include <ArduinoOTA.h>
+
 #define WDT_TIMEOUT 120
 
 
@@ -83,6 +85,7 @@ const uint32_t GRAY_COL = darkMode ? TFT_DARKGREY : TFT_LIGHTGREY;
 
 
 bool MASTER_MODE = true;
+bool is_OTA_ongoing = false;
 
 // Variables del menú
 enum MenuModes { MAIN_SCREEN, MENU, WIFI_SETUP};
@@ -135,7 +138,9 @@ void setup() {
   tft.setTouch(calData);
 
   tft.fillScreen(BACK_COL);
-  while (!Serial && (millis() <= 1000));
+  draw_onoff_button();
+
+  //while (!Serial && (millis() <= 1000));
 
   // Connect to wifi
   init_wifi();
@@ -143,8 +148,10 @@ void setup() {
   // Connect to Sinric
   init_sinric();
 
+  // Init OTA
+  init_OTA();
 
-  draw_onoff_button();
+
 }
 
 // Configuration settings
@@ -413,6 +420,10 @@ void handle_menu_screen(long now)
       tft.drawString("Calibrate touch", 20, 20);
       tft.drawString("Reset Calib.", 20, 50);
       tft.drawString("Configure WiFi", 20, 80);
+      tft.drawString(WiFi.localIP().toString(), 140, 80);
+      tft.drawNumber(WiFi.RSSI(), 260, 80);
+      tft.drawString("dBm", 290, 80);
+      //tft.printf("%d dBm\r\n", WiFi.RSSI());
       tft.drawString("Restart", 20, 110);
     }
     
@@ -702,28 +713,28 @@ void handle_main_screen(long now)
 
 void loop() 
 {
-    esp_task_wdt_reset();
+  long now = millis();
+  esp_task_wdt_reset();
 
-    // TODO:
-    // Activar programación OTA?
-    SinricPro.handle();
+  ArduinoOTA.handle();
+  if (is_OTA_ongoing) return; 
 
-    long now = millis();
+  SinricPro.handle();
 
-    switch (MENU_MODE)
-    {
-    case MAIN_SCREEN:
-      handle_main_screen(now);
-      break;
-    case MENU:
-      handle_menu_screen(now);
-      break;
-    case WIFI_SETUP:
-      handle_webserver_screen(now);
-      break;
-    default:
-      break;
-    }
+  switch (MENU_MODE)
+  {
+  case MAIN_SCREEN:
+    handle_main_screen(now);
+    break;
+  case MENU:
+    handle_menu_screen(now);
+    break;
+  case WIFI_SETUP:
+    handle_webserver_screen(now);
+    break;
+  default:
+    break;
+  }
 }
 
 // Funciones de conectividad
@@ -744,6 +755,7 @@ void init_wifi()
   Serial.println("WiFi connected");
   Serial.println("IP address: ");
   Serial.println(WiFi.localIP());
+  Serial.printf("RSSI: %d dBm\r\n", WiFi.RSSI());
 }
 
 void set_webserver()
@@ -838,6 +850,7 @@ void handle_OnSubmit()
   tft.drawString("Connecting to WiFi...", 30, 60);
   init_wifi();
   init_sinric();
+  init_OTA();
 
   // Volvemos a pantalla principal
   tft.fillScreen(BACK_COL);
@@ -966,6 +979,8 @@ String SendHTML()
 // Funciones de Sinric
 void init_sinric() 
 {
+  if (!WiFi.isConnected()) return;
+
   SinricProThermostat &myThermostat = SinricPro[Device_id];
   myThermostat.onPowerState(onPowerState);
   myThermostat.onTargetTemperature(onTargetTemperature);
@@ -1005,7 +1020,8 @@ bool onAdjustTargetTemperature(const String & deviceId, float &temperatureDelta)
   return true;
 }
 
-bool onThermostatMode(const String &deviceId, String &mode) {
+bool onThermostatMode(const String &deviceId, String &mode) 
+{
   Serial.printf("Thermostat %s set to mode %s\r\n", deviceId.c_str(), mode.c_str());
 
   if (mode == "HEAT") ClimaMode = 2;
@@ -1054,3 +1070,83 @@ void send_sinric_mode(int mode)
   else if (mode == 2) myThermostat.sendThermostatModeEvent("HEAT");
 }
 
+int last_percentage = -1;
+
+// Funciones OTA
+void init_OTA()
+{
+  if (!WiFi.isConnected()) return;
+
+  ArduinoOTA.onStart([&]() 
+  {
+    is_OTA_ongoing = true;
+
+    String type;
+    if (ArduinoOTA.getCommand() == U_FLASH) {
+      type = "sketch";
+    } else { // U_SPIFFS
+      type = "filesystem";
+    }
+
+    // NOTE: if updating SPIFFS this would be the place to unmount SPIFFS using SPIFFS.end()
+    Serial.println("Start updating " + type);
+    
+    set_screen_backlight(lastTouch, millis(), true);
+    tft.fillScreen(BACK_COL);
+    tft.setTextFont(4);
+    tft.setTextColor(FRONT_COL, BACK_COL);
+    tft.drawString("OTA Update", 90, 30);
+    tft.drawRect(28, 78, 264, 34, FRONT_COL);
+  });
+
+  ArduinoOTA.onEnd([]() 
+  {
+    is_OTA_ongoing = false;
+    Serial.println("\nEnd");
+
+    tft.setTextColor(TFT_GREEN, BACK_COL);
+    tft.drawString("Complete!", 90, 150);
+    delay(1000);
+    tft.fillScreen(BACK_COL);
+  });
+
+  
+
+  ArduinoOTA.onProgress([&](unsigned int progress, unsigned int total) 
+  {
+    int percentage = 100*progress/total;
+    if (percentage > last_percentage && percentage % 4 == 0)
+    {
+      Serial.printf("Progress: %u%%\r\n", percentage);
+      int x = 30+percentage*2.5;
+      tft.fillRect(x, 80, 9, 30, TFT_GREEN);
+      last_percentage = percentage;
+    }
+
+  });
+
+  ArduinoOTA.onError([](ota_error_t error) {
+    Serial.printf("Error[%u]: ", error);
+    if (error == OTA_AUTH_ERROR) {
+      Serial.println("Auth Failed");
+    } else if (error == OTA_BEGIN_ERROR) {
+      Serial.println("Begin Failed");
+    } else if (error == OTA_CONNECT_ERROR) {
+      Serial.println("Connect Failed");
+    } else if (error == OTA_RECEIVE_ERROR) {
+      Serial.println("Receive Failed");
+    } else if (error == OTA_END_ERROR) {
+      Serial.println("End Failed");
+    }
+
+    tft.setTextColor(TFT_RED, BACK_COL);
+    tft.drawString("Error :(", 80, 180);
+    delay(1000);
+    is_OTA_ongoing = false;
+    ESP.restart();
+  });
+
+  ArduinoOTA.setTimeout(5000);
+  ArduinoOTA.begin();
+  Serial.println("OTA iniciado");
+}
