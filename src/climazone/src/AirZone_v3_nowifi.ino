@@ -95,7 +95,7 @@ const int MenuPages = 2;
 
 // Ajustar el valor mínimo de la pantalla en modo "sleep"
 int MIN_BACKLIGHT = 15;
-
+float Hysteresis;
 
 // Internet settings
 String Wifi_ssid;
@@ -108,7 +108,7 @@ String Device_name;
 
 void setup() {
   
-  Serial.begin(9600);
+  Serial.begin(115200);
   Serial.println("Configuring WDT...");
   esp_task_wdt_init(WDT_TIMEOUT, true); //enable panic so ESP32 restarts
   esp_task_wdt_add(NULL); //add current thread to WDT watch
@@ -165,6 +165,7 @@ void load_data_eeprom()
   MASTER_MODE = preferences.getBool("master_mode", false);
   temp_offset = preferences.getFloat("temp_offset", 0.0f);
   MIN_BACKLIGHT = preferences.getInt("min_backlight", MIN_BACKLIGHT);
+  Hysteresis = preferences.getFloat("hysteresis", 0.1);
 
   // Load touch screen calibration
   calData[0] = preferences.getUShort("caldata_0", calData_[0]);
@@ -192,6 +193,7 @@ void save_data_eeprom()
   preferences.putBool("master_mode", MASTER_MODE);
   preferences.putFloat("temp_offset", temp_offset);
   preferences.putInt("min_backlight", MIN_BACKLIGHT);
+  preferences.putFloat("hysteresis", Hysteresis);
 
   // Save touch screen calibration
   preferences.putUShort("caldata_0", calData[0]);
@@ -401,16 +403,18 @@ void handle_menu_screen(long now)
       tft.drawString("Temp. Offset", 20, 20);
       tft.drawString("Master mode", 20, 50);
       tft.drawString("Min backlight", 20, 80);
+      tft.drawString("Hysteresis", 20, 110);
      
       tft.drawFloat(temp_offset, 1, 230, 20);
       MASTER_MODE ? tft.drawString("Yes", 230, 50) : tft.drawString(" No ", 230, 50);
       tft.drawNumber(MIN_BACKLIGHT, 230, 80);
+      tft.drawFloat(Hysteresis, 1, 230, 110);
 
       int x1 = 200;
       int x2 = 290;
-      int y_pos[] = {20, 50, 80};
+      int y_pos[] = {20, 50, 80, 110};
       // Dibujamos controles
-      for (int i = 0; i < 3; i++) {
+      for (int i = 0; i < 4; i++) {
           tft.fillTriangle(x1, y_pos[i], x1, y_pos[i]+16, x1-10, y_pos[i]+8, FRONT_COL);
           tft.fillTriangle(x2, y_pos[i], x2, y_pos[i]+16, x2+10, y_pos[i]+8, FRONT_COL);
       }
@@ -461,7 +465,7 @@ void handle_menu_screen(long now)
           // Control offset temperatura
           int x1 = 200;
           int x2 = 290;
-          int y_pos[] = {20, 50, 80};
+          int y_pos[] = {20, 50, 80, 110};
           if (x >= x1 - 10 && x <= x1 && y >= y_pos[0] && y <= y_pos[0] + 16) {
               tft.fillRect(210, 20, 280, 16, BACK_COL);
               temp_offset -= 0.1;
@@ -485,6 +489,18 @@ void handle_menu_screen(long now)
               tft.fillRect(210, 80, 280, 16, BACK_COL);
               MIN_BACKLIGHT++;
               if (MIN_BACKLIGHT > 255) MIN_BACKLIGHT = 255;
+          }
+
+          // Hysteresis control
+          if (x >= x1 - 10 && x <= x1 && y >= y_pos[3] && y <= y_pos[3] + 16) {
+              tft.fillRect(210, y_pos[3], 280, 16, BACK_COL);
+              Hysteresis -= 0.1;
+              if (Hysteresis < 0) Hysteresis = 0;
+          }
+          if (x >= x2 && x <= x2 + 10 && y >= y_pos[3] && y <= y_pos[3] + 16) {
+              tft.fillRect(210, y_pos[3], 280, 16, BACK_COL);
+              Hysteresis += 0.1;
+              if (Hysteresis > 5) Hysteresis = 5;
           }
         }
         else if (currMenuPage == 1)
@@ -621,11 +637,11 @@ void handle_main_screen(long now)
       if (set_temp < 15) set_temp = 15;
 
       // Demanda de frío
-      if (temp2 > set_temp + 0.1)  digitalWrite(outQ1, HIGH);
+      if (temp2 > set_temp + Hysteresis)  digitalWrite(outQ1, HIGH);
       else digitalWrite(outQ1, LOW);
       
       // Demanda de calor
-      if (temp2 < set_temp - 0.1)  digitalWrite(outQ2, HIGH);
+      if (temp2 < set_temp - Hysteresis)  digitalWrite(outQ2, HIGH);
       else digitalWrite(outQ2, LOW);
 
       send_sinric_set_temp(set_temp, now);
@@ -1146,6 +1162,7 @@ void init_OTA()
     ESP.restart();
   });
 
+  ArduinoOTA.setHostname(Device_name.c_str());
   ArduinoOTA.setTimeout(5000);
   ArduinoOTA.begin();
   Serial.println("OTA iniciado");
