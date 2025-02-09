@@ -174,6 +174,8 @@ void load_data_eeprom()
   calData[3] = preferences.getUShort("caldata_3", calData_[3]);
   calData[4] = preferences.getUShort("caldata_4", calData_[4]);
 
+  touch_debug = preferences.getBool("touch_debug", false);
+
   // Load internet settings
   Wifi_ssid = preferences.getString("wifi_ssid", "");
   Wifi_password = preferences.getString("wifi_password", "");
@@ -201,6 +203,8 @@ void save_data_eeprom()
   preferences.putUShort("caldata_2", calData[2]);
   preferences.putUShort("caldata_3", calData[3]);
   preferences.putUShort("caldata_4", calData[4]);
+
+  preferences.putBool("touch_debug", touch_debug);
 
   // Load internet settings
   preferences.putString("wifi_ssid", Wifi_ssid);
@@ -404,17 +408,19 @@ void handle_menu_screen(long now)
       tft.drawString("Master mode", 20, 50);
       tft.drawString("Min backlight", 20, 80);
       tft.drawString("Hysteresis", 20, 110);
+      tft.drawString("Debug Touch", 20, 140);
      
       tft.drawFloat(temp_offset, 1, 230, 20);
       MASTER_MODE ? tft.drawString("Yes", 230, 50) : tft.drawString(" No ", 230, 50);
       tft.drawNumber(MIN_BACKLIGHT, 230, 80);
       tft.drawFloat(Hysteresis, 1, 230, 110);
+      touch_debug ? tft.drawString("Yes", 230, 140) : tft.drawString(" No ", 230, 140);
 
       int x1 = 200;
       int x2 = 290;
-      int y_pos[] = {20, 50, 80, 110};
+      int y_pos[] = {20, 50, 80, 110, 140};
       // Dibujamos controles
-      for (int i = 0; i < 4; i++) {
+      for (int i = 0; i < 5; i++) {
           tft.fillTriangle(x1, y_pos[i], x1, y_pos[i]+16, x1-10, y_pos[i]+8, FRONT_COL);
           tft.fillTriangle(x2, y_pos[i], x2, y_pos[i]+16, x2+10, y_pos[i]+8, FRONT_COL);
       }
@@ -465,7 +471,7 @@ void handle_menu_screen(long now)
           // Control offset temperatura
           int x1 = 200;
           int x2 = 290;
-          int y_pos[] = {20, 50, 80, 110};
+          int y_pos[] = {20, 50, 80, 110, 140};
           if (x >= x1 - 10 && x <= x1 && y >= y_pos[0] && y <= y_pos[0] + 16) {
               tft.fillRect(210, 20, 280, 16, BACK_COL);
               temp_offset -= 0.1;
@@ -502,6 +508,10 @@ void handle_menu_screen(long now)
               Hysteresis += 0.1;
               if (Hysteresis > 5) Hysteresis = 5;
           }
+
+          // Control touch debug
+          if (x >= x1 - 10 && x <= x1 && y >= y_pos[4] && y <= y_pos[4] + 16) touch_debug = !touch_debug;
+          if (x >= x2 && x <= x2 + 10 && y >= y_pos[4] && y <= y_pos[4] + 16) touch_debug = !touch_debug;
         }
         else if (currMenuPage == 1)
         {
@@ -575,6 +585,8 @@ void set_airzone_active(bool active)
 
 bool get_airzone_active() { return airzone_active; }
 
+int press_count = 0;
+
 void handle_main_screen(long now)
 {
  // Actualizamos medición de valores
@@ -587,7 +599,22 @@ void handle_main_screen(long now)
   // Gestión de la pantalla táctil
   bool pressed = false;
   uint16_t x = 0, y = 0; // To store the touch coordinates
-  if (now - lastTouch > 200) pressed = get_pressed_point(now, &x, &y);
+  if (now - lastTouch > 200) 
+  {
+    pressed = get_pressed_point(now, &x, &y);
+
+    if (pressed) press_count++;
+    else press_count = 0;
+  }
+
+  if (press_count > 20)
+  {
+    Serial.println("Activating Touch debug...");
+    tft.drawString("Activating Debug Mode", 50, 120);
+    touch_debug = true;
+    press_count = 0;
+  }
+  
 
   bool pressed_up = false;
   bool pressed_down = false;
